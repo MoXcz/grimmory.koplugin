@@ -18,6 +18,7 @@ local logger = GrimmoryLogger:new()
 ---@field settings GrimmorySettings
 ---@field api GrimmoryAPI
 ---@field executor GrimmoryExecutor
+---@field private is_running_in_background boolean | nil
 ---@field updater GrimmorySelfUpdater
 ---@field reading_progress_manager ReadingProgressManager
 local DialogManager = {}
@@ -56,15 +57,27 @@ end
 ---@param runnable fun(): any must return a JSON-serializable value
 ---@param on_done fun(ok: boolean, result: any)
 function DialogManager:runInBackground(busy_text, runnable, on_done)
+    -- A second tap while waiting would fork again and orphan the busy message.
+    if self.is_running_in_background then
+        return
+    end
+
+    self.is_running_in_background = true
+
     local close_busy_message = self:toast(busy_text, 0)
 
     self.executor:background(
         function(run)
-            local ok, result = run(runnable, function() end)
+            local run_ok, ok, result = pcall(run, runnable, function() end)
 
+            self.is_running_in_background = false
             pcall(close_busy_message)
 
-            on_done(ok, result)
+            if run_ok then
+                on_done(ok, result)
+            else
+                on_done(false, ok)
+            end
         end,
         false
     )
@@ -212,11 +225,12 @@ function DialogManager:showTargetShelvesDialog(shelves, on_change)
     local is_name_used = {}
 
     for _, shelf in ipairs(shelves) do
-        local unique_shelf_name = shelf.name
+        local shelf_name = shelf.name or tostring(shelf.id)
+        local unique_shelf_name = shelf_name
         local unique_shelf_index = 0
         while is_name_used[unique_shelf_name] do
             unique_shelf_index = unique_shelf_index + 1
-            unique_shelf_name = shelf.name .. " " .. unique_shelf_index
+            unique_shelf_name = shelf_name .. " " .. unique_shelf_index
         end
         is_name_used[unique_shelf_name] = true
 
