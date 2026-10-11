@@ -276,7 +276,7 @@ function Grimmory:onAnnotationsModified(annotation_info)
     end
 
     if is_modified and self.ui ~= nil and self.ui.document ~= nil and self.ui.document.file ~= nil then
-        if annotation.grimmory_id ~= nil then
+        if annotation ~= nil and annotation.grimmory_id ~= nil then
             self.doc_metadata:appendModifiedGrimmoryAnnotation(
                 self.ui.document.file,
                 annotation.grimmory_id

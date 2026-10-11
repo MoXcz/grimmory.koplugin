@@ -177,7 +177,7 @@ local function enable_wifi(timeout)
             logger:err("Failed to turn on wifi: Unknown")
 
             -- Clean up the connection the same as `NetworkManager:enableWifi` would
-            pcall(NetworkManager, NetworkManager._abortWifiConnection, NetworkManager)
+            pcall(NetworkManager._abortWifiConnection, NetworkManager)
             return false
         end
 

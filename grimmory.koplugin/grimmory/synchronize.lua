@@ -769,8 +769,7 @@ function GrimmorySynchronize:pullBooks(callback)
     local directory_exists, directory_error_message = util.makePath(download_directory)
     if not directory_exists then
         logger:err("Failed to create download directory", directory_error_message)
-        error("Failed to create download directory", directory_error_message)
-        return
+        error("Failed to create download directory: " .. tostring(directory_error_message))
     end
 
     local seen_books = {}
