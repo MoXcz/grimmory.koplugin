@@ -117,9 +117,12 @@ function Grimmory:init()
         doc_metadata = self.doc_metadata,
     })
 
+    self.executor = GrimmoryExecutor:new()
+
     self.dialog_manager = GrimmoryDialogManager:new({
         settings = self.settings,
         api = self.api,
+        executor = self.executor,
         updater = self.updater,
         reading_progress_manager = self.reading_progress_manager,
     })
@@ -139,8 +142,6 @@ function Grimmory:init()
         reading_progress_manager = self.reading_progress_manager,
         reading_annotations = self.reading_annotations,
     })
-
-    self.executor = GrimmoryExecutor:new()
 
     self:onGrimmorySettingsChanged()
 

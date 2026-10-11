@@ -145,10 +145,11 @@ function GrimmorySelfUpdater:getLatestReleaseVersion()
     return self.latest_known_version or current_version
 end
 
-function GrimmorySelfUpdater:fetchLatestVersion()
+---@return string | nil latest_version
+function GrimmorySelfUpdater:lookupLatestVersion()
     if not PluginMetadata.hasRepository() then
         logger:warn("Unknown repository - cannot fetch latest version")
-        return
+        return nil
     end
 
     local ok, version = self.github_api:getLatestReleaseVersion(
@@ -156,9 +157,14 @@ function GrimmorySelfUpdater:fetchLatestVersion()
     )
 
     if not ok or not version then
-        return
+        return nil
     end
 
+    return version
+end
+
+---@param version string
+function GrimmorySelfUpdater:setLatestKnownVersion(version)
     self.latest_known_version = version
 end
 

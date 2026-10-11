@@ -17,6 +17,7 @@ local logger = GrimmoryLogger:new()
 ---@class DialogManager
 ---@field settings GrimmorySettings
 ---@field api GrimmoryAPI
+---@field executor GrimmoryExecutor
 ---@field updater GrimmorySelfUpdater
 ---@field reading_progress_manager ReadingProgressManager
 local DialogManager = {}
@@ -48,6 +49,25 @@ function DialogManager:toast(text, timeout)
     self.info_message = info_message
 
     return function() UIManager:close(info_message) end
+end
+
+---Runs a blocking network call in a subprocess so the UI stays responsive.
+---@param busy_text string
+---@param runnable fun(): any must return a JSON-serializable value
+---@param on_done fun(ok: boolean, result: any)
+function DialogManager:runInBackground(busy_text, runnable, on_done)
+    local close_busy_message = self:toast(busy_text, 0)
+
+    self.executor:background(
+        function(run)
+            local ok, result = run(runnable, function() end)
+
+            pcall(close_busy_message)
+
+            on_done(ok, result)
+        end,
+        false
+    )
 end
 
 function DialogManager:showConnectionSettings()
@@ -84,17 +104,26 @@ function DialogManager:showConnectionSettings()
                 callback = function()
                     local fields = dialog:getFields()
 
-                    local ok, version = self.api:testConnection(
-                        fields[1],
-                        fields[2],
-                        fields[3]
-                    )
+                    self:runInBackground(
+                        _("Testing connection"),
+                        function()
+                            local ok, version_or_error = self.api:testConnection(
+                                fields[1],
+                                fields[2],
+                                fields[3]
+                            )
 
-                    if ok then
-                        self:toast(T(_("Connection successful\nGrimmory (%1)"), tostring(version)))
-                    else
-                        self:toast(T(_("Unable to connect to Grimmory\nError: %1"), tostring(version)))
-                    end
+                            return { ok = ok, message = tostring(version_or_error) }
+                        end,
+                        function(run_ok, result)
+                            if run_ok and type(result) == "table" and result.ok then
+                                self:toast(T(_("Connection successful\nGrimmory (%1)"), result.message))
+                            else
+                                local error_message = type(result) == "table" and result.message or tostring(result)
+                                self:toast(T(_("Unable to connect to Grimmory\nError: %1"), error_message))
+                            end
+                        end
+                    )
                 end,
             },
             {
@@ -121,15 +150,29 @@ end
 
 ---@param on_change? function called after the target shelves change
 function DialogManager:showTargetShelvesSettings(on_change)
-    local ok, result = self.api:getShelves()
+    self:runInBackground(
+        _("Loading shelves"),
+        function()
+            local ok, shelves_or_error = self.api:getShelves()
 
-    if not ok or type(result) == "string" then
-        logger:err("Something went wrong loading shelves", result)
-        self:toast(T(_("Could not load shelves: %1"), result))
-        return
-    end
+            if not ok or type(shelves_or_error) ~= "table" then
+                return { error = tostring(shelves_or_error) }
+            end
 
-    self:showTargetShelvesDialog(result, on_change)
+            return { shelves = shelves_or_error }
+        end,
+        function(run_ok, result)
+            if not run_ok or type(result) ~= "table" or result.shelves == nil then
+                local error_message = type(result) == "table" and result.error or tostring(result)
+
+                logger:err("Something went wrong loading shelves", error_message)
+                self:toast(T(_("Could not load shelves: %1"), error_message))
+                return
+            end
+
+            self:showTargetShelvesDialog(result.shelves, on_change)
+        end
+    )
 end
 
 ---@param shelves GrimmoryTargetShelf[]
@@ -341,14 +384,23 @@ function DialogManager:showDownloadDirectorySettings(on_change)
     UIManager:show(dialog)
 end
 
-function DialogManager:showPluginUpdateCheck(skip_version_check)
-    if not skip_version_check then
-        -- Refresh the latest version on open.
-        local close_message = self:toast(_("Checking for Updates"), 0)
-        self.updater:fetchLatestVersion()
-        pcall(close_message)
-    end
+function DialogManager:showPluginUpdateCheck()
+    self:runInBackground(
+        _("Checking for Updates"),
+        function()
+            return self.updater:lookupLatestVersion()
+        end,
+        function(run_ok, latest_version)
+            if run_ok and latest_version then
+                self.updater:setLatestKnownVersion(latest_version)
+            end
 
+            self:showPluginUpdateDialog()
+        end
+    )
+end
+
+function DialogManager:showPluginUpdateDialog()
     local dialog
     local latest_version = self.updater:getLatestReleaseVersion()
     local is_update_available = self.updater:isUpdateAvailable()
@@ -378,9 +430,8 @@ function DialogManager:showPluginUpdateCheck(skip_version_check)
                 {
                     text = _("Check for Updates"),
                     callback = function()
-                        self.updater:fetchLatestVersion()
                         UIManager:close(dialog)
-                        self:showPluginUpdateCheck(true)
+                        self:showPluginUpdateCheck()
                     end,
                 },
             },
