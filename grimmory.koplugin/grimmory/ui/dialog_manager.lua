@@ -119,7 +119,8 @@ function DialogManager:showConnectionSettings()
     dialog:onShowKeyboard()
 end
 
-function DialogManager:showTargetShelvesSettings()
+---@param on_change? function called after the target shelves change
+function DialogManager:showTargetShelvesSettings(on_change)
     local dialog
     local ok, result = self.api:getShelves()
 
@@ -148,6 +149,10 @@ function DialogManager:showTargetShelvesSettings()
                     UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
 
                     UIManager:close(dialog)
+
+                    if on_change then
+                        on_change()
+                    end
                 end,
             }
         }
@@ -178,6 +183,10 @@ function DialogManager:showTargetShelvesSettings()
                         UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
 
                         UIManager:close(dialog)
+
+                        if on_change then
+                            on_change()
+                        end
                     end
                 }
             }
@@ -192,7 +201,8 @@ function DialogManager:showTargetShelvesSettings()
     UIManager:show(dialog)
 end
 
-function DialogManager:showSyncFrequencySettings()
+---@param on_change? function called after the frequency changes
+function DialogManager:showSyncFrequencySettings(on_change)
     local dialog
     dialog = MultiInputDialog:new({
         title = _("Periodic Sync Frequency"),
@@ -222,6 +232,10 @@ function DialogManager:showSyncFrequencySettings()
                         UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
 
                         UIManager:close(dialog)
+
+                        if on_change then
+                            on_change()
+                        end
                     end,
                 },
             },

@@ -69,6 +69,7 @@ function GrimmoryMenu:getAboutMenu()
                     self.dialog_manager:showPluginUpdateCheck()
                 end
             end,
+            keep_menu_open = true,
         },
     }
 end
@@ -125,9 +126,12 @@ function GrimmoryMenu:getAutomaticSyncOptionsMenu()
                 local frequency = self.settings:getSyncFrequency()
                 return T(_("Frequency: %1 minutes"), frequency)
             end,
-            callback = function()
-                self.dialog_manager:showSyncFrequencySettings()
+            callback = function(touchmenu_instance)
+                self.dialog_manager:showSyncFrequencySettings(function()
+                    touchmenu_instance:updateItems()
+                end)
             end,
+            keep_menu_open = true,
             separator = true,
         },
         {
@@ -161,6 +165,7 @@ function GrimmoryMenu:getSyncOptionsMenu()
             callback = function()
                 self.dialog_manager:showSessionThresholdSettings()
             end,
+            keep_menu_open = true,
             separator = true,
         },
         {
@@ -218,6 +223,7 @@ function GrimmoryMenu:getDownloadOptionsMenu()
             callback = function()
                 self.dialog_manager:showDownloadDirectorySettings()
             end,
+            keep_menu_open = true,
         },
         {
             text_func = function()
@@ -245,9 +251,12 @@ function GrimmoryMenu:getDownloadOptionsMenu()
 
                 return true
             end,
-            callback = function()
-                self.dialog_manager:showTargetShelvesSettings()
+            callback = function(touchmenu_instance)
+                self.dialog_manager:showTargetShelvesSettings(function()
+                    touchmenu_instance:updateItems()
+                end)
             end,
+            keep_menu_open = true,
             separator = true,
         },
         {
@@ -270,6 +279,7 @@ function GrimmoryMenu:getTopMenu()
             callback = function()
                 self.dialog_manager:showConnectionSettings()
             end,
+            keep_menu_open = true,
         },
         {
             text = _("Automatic Sync"),
