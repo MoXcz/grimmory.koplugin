@@ -219,9 +219,13 @@ end
 function GrimmoryMenu:getDownloadOptionsMenu()
     return {
         {
-            text = _("Set Download Directory"),
-            callback = function()
-                self.dialog_manager:showDownloadDirectorySettings()
+            text_func = function()
+                return T(_("Download Directory: %1"), self.settings:getDownloadDirectory())
+            end,
+            callback = function(touchmenu_instance)
+                self.dialog_manager:showDownloadDirectorySettings(function()
+                    touchmenu_instance:updateItems()
+                end)
             end,
             keep_menu_open = true,
         },

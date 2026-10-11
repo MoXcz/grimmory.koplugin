@@ -174,7 +174,7 @@ function GrimmorySynchronize:pushBookAnnotations(book_path, book_grimmory_id)
     for _, modified_id in ipairs(modified_grimmory_annotations) do
         is_modified_by_id[tostring(modified_id)] = true
 
-        logger:dbg("Deleting annotation frim Grimmory:", book_path, "-", modified_id)
+        logger:dbg("Deleting annotation from Grimmory:", book_path, "-", modified_id)
         self.api:deleteAnnotation(modified_id)
 
         -- Even if the delete fails - which it does today with a 5xx instead of 404 - we

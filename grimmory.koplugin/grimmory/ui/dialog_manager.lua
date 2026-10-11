@@ -291,15 +291,22 @@ function DialogManager:showSessionThresholdSettings()
     dialog:onShowKeyboard()
 end
 
-function DialogManager:showDownloadDirectorySettings()
+---@param on_change? function called after the download directory changes
+function DialogManager:showDownloadDirectorySettings(on_change)
     local dialog
     dialog = PathChooser:new({
-        title = "Download Directory",
+        title = _("Download Directory"),
         select_file = false,
         show_files = false,
         path = self.settings:getDownloadDirectory(),
         onConfirm = function(newPath)
             self.settings:setDownloadDirectory(newPath)
+
+            UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
+
+            if on_change then
+                on_change()
+            end
         end,
     })
 
@@ -401,7 +408,7 @@ function DialogManager:showProgressDialog(title, dismiss_callback, dismiss_text)
     end
 
     dialog = ProgressbarDialog:new({
-        title = _(title),
+        title = title,
         progress_max = 100,
         refresh_time_seconds = 3,
         dismiss_text = dismiss_text,
