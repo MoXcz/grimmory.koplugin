@@ -356,15 +356,17 @@ function Grimmory:pullProgressForOpenBook()
     )
 end
 
+---@return boolean ready
+---@return string | nil refusal_message
 function Grimmory:isReadyToSync()
     if self.settings:getBaseUri() == "" then
         logger:info("BaseURI is not configured, cannot sync")
-        return false
+        return false, _("Grimmory connection is not configured")
     end
 
     if self.is_synchronizing then
         logger:info("Synchronization is already happening, not ready to sync again")
-        return false
+        return false, _("Grimmory synchronization is already running")
     end
 
     return true
@@ -437,7 +439,12 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
     UIManager:broadcastEvent(Event:new("FlushSettings"))
 
     local function background_callback(run, terminate)
-        if not self:isReadyToSync() then
+        local ready, refusal_message = self:isReadyToSync()
+        if not ready then
+            if verbose then
+                self.dialog_manager:toast(refusal_message)
+            end
+
             return
         end
 
@@ -476,6 +483,8 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
         local last_progress_step = 0
         local session_count = 0
         local session_error_count = 0
+        local progress_push_count = 0
+        local progress_error_count = 0
         local book_download_count = 0
         local book_refresh_count = 0
         local book_error_count = 0
@@ -548,6 +557,10 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
                     session_count = session_count + 1
                 elseif progress.state == "session-error" then
                     session_error_count = session_error_count + 1
+                elseif progress.state == "progress-pushed" then
+                    progress_push_count = progress_push_count + 1
+                elseif progress.state == "progress-failed" then
+                    progress_error_count = progress_error_count + 1
                 elseif progress.state == "book-downloaded" then
                     book_download_count = book_download_count + 1
 
@@ -631,6 +644,14 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
 
             if session_error_count > 0 then
                 table.insert(message, T(_("%1 session(s) failed"), session_error_count))
+            end
+
+            if progress_push_count > 0 then
+                table.insert(message, T(_("%1 progress update(s) pushed"), progress_push_count))
+            end
+
+            if progress_error_count > 0 then
+                table.insert(message, T(_("%1 progress update(s) failed"), progress_error_count))
             end
 
             if book_download_count > 0 then
