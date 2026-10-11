@@ -121,7 +121,6 @@ end
 
 ---@param on_change? function called after the target shelves change
 function DialogManager:showTargetShelvesSettings(on_change)
-    local dialog
     local ok, result = self.api:getShelves()
 
     if not ok or type(result) == "string" then
@@ -130,71 +129,100 @@ function DialogManager:showTargetShelvesSettings(on_change)
         return
     end
 
+    self:showTargetShelvesDialog(result, on_change)
+end
+
+---@param shelves GrimmoryTargetShelf[]
+---@param on_change? function called after the target shelves change
+function DialogManager:showTargetShelvesDialog(shelves, on_change)
+    local dialog
+
+    local is_selected_by_id = {}
+    for _, target_shelf in ipairs(self.settings:getDownloadTargetShelves()) do
+        is_selected_by_id[tostring(target_shelf.id)] = true
+    end
+
+    local function apply_target_shelves(target_shelves)
+        self.settings:setDownloadTargetShelves(target_shelves)
+
+        UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
+
+        UIManager:close(dialog)
+
+        if on_change then
+            on_change()
+        end
+    end
+
     local buttons = {
-        {
-            {
-                text = _("Cancel Selection"),
-                callback = function()
-                    UIManager:close(dialog)
-                end,
-            }
-        },
         {
             {
                 text = _("All Shelves"),
                 callback = function()
-                    logger:dbg("Set target shelves to All Shelves")
-                    self.settings:setDownloadTargetShelves({})
-
-                    UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
-
-                    UIManager:close(dialog)
-
-                    if on_change then
-                        on_change()
-                    end
+                    apply_target_shelves({})
                 end,
             }
         }
     }
 
-    local shelfNameToId = {}
+    local selectable_shelves = {}
+    local is_name_used = {}
 
-    for _, shelf in ipairs(result) do
-        local shelfName = shelf.name
-        local shelfId = shelf.id
-
-        local uniqueShelfName = shelfName
-        local uniqueShelfIndex = 0
-        while shelfNameToId[uniqueShelfName] do
-            uniqueShelfIndex = uniqueShelfIndex + 1
-            uniqueShelfName = shelfName .. " " .. uniqueShelfIndex
+    for _, shelf in ipairs(shelves) do
+        local unique_shelf_name = shelf.name
+        local unique_shelf_index = 0
+        while is_name_used[unique_shelf_name] do
+            unique_shelf_index = unique_shelf_index + 1
+            unique_shelf_name = shelf.name .. " " .. unique_shelf_index
         end
+        is_name_used[unique_shelf_name] = true
+
+        local shelf_key = tostring(shelf.id)
+        table.insert(selectable_shelves, { id = shelf.id, name = unique_shelf_name })
 
         table.insert(
             buttons,
             {
                 {
-                    text = uniqueShelfName,
+                    text = unique_shelf_name,
+                    checked_func = function()
+                        return is_selected_by_id[shelf_key] == true
+                    end,
                     callback = function()
-                        logger:dbg("Set target shelves to shelf ID", shelfId)
-                        self.settings:setDownloadTargetShelves({ { id = shelfId, name = uniqueShelfName } })
-
-                        UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
-
-                        UIManager:close(dialog)
-
-                        if on_change then
-                            on_change()
-                        end
-                    end
+                        is_selected_by_id[shelf_key] = not is_selected_by_id[shelf_key]
+                    end,
                 }
             }
         )
     end
 
+    table.insert(
+        buttons,
+        {
+            {
+                text = _("Cancel"),
+                callback = function()
+                    UIManager:close(dialog)
+                end,
+            },
+            {
+                text = _("Apply"),
+                callback = function()
+                    local target_shelves = {}
+                    for _, shelf in ipairs(selectable_shelves) do
+                        if is_selected_by_id[tostring(shelf.id)] then
+                            table.insert(target_shelves, shelf)
+                        end
+                    end
+
+                    apply_target_shelves(target_shelves)
+                end,
+            },
+        }
+    )
+
     dialog = ButtonDialog:new({
-        title = _("Target Shelf"),
+        title = _("Source Shelves"),
         buttons = buttons,
     })
 
