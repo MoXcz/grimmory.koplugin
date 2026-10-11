@@ -49,6 +49,32 @@ function GrimmorySynchronize:pushBookProgress(book_id, callback)
         return
     end
 
+    local push_decision, remote_percent = self.reading_progress_manager:getPushDecision(progress)
+
+    if push_decision == "unknown" then
+        logger:err("Could not read remote progress, not pushing blindly for:", book_id)
+        callback({
+            state = "progress-failed",
+            book_path = progress.book_path,
+            book_md5 = progress.book_md5,
+        })
+        return
+    end
+
+    if push_decision == "keep-remote" then
+        logger:info("Remote progress is further ahead, not pushing for:", book_id)
+        callback({
+            state = "progress-kept",
+            book_path = progress.book_path,
+            local_progress = progress.end_progress,
+            remote_progress = remote_percent,
+        })
+
+        -- Mark as handled so this event is not checked again on every sync.
+        self.repository:updateBookSyncTimestamp(book_id, "progress", progress.end_time)
+        return
+    end
+
     logger:info("Synchronizing reading progress for:", book_id, ";", last_synced_at, "->", progress.end_time)
     local ok = self.reading_progress_manager:pushRemoteProgress(progress)
 
@@ -57,6 +83,8 @@ function GrimmorySynchronize:pushBookProgress(book_id, callback)
             state = "progress-pushed",
             book_path = progress.book_path,
             book_md5 = progress.book_md5,
+            from_progress = remote_percent,
+            to_progress = progress.end_progress,
         })
 
         self.repository:updateBookSyncTimestamp(book_id, "progress", progress.end_time)
@@ -454,15 +482,40 @@ function GrimmorySynchronize:removeEmptyShelves(callback)
     ReadCollection:write()
 end
 
-function GrimmorySynchronize:pullBookProgress(book_path)
+---@param book_path string
+---@param callback function
+function GrimmorySynchronize:pullBookProgress(book_path, callback)
     if not self.settings:getSyncReadingProgress() then
         return
     end
 
-    local _, _, progress = self.reading_progress_manager:getRemoteProgressForBook(book_path)
+    local decision, local_percent, remote_progress = self.reading_progress_manager:getPullDecision(book_path)
 
-    if progress then
-        self.reading_progress_manager:applyProgress(progress)
+    if decision == "apply" and self.reading_progress_manager:isOpenBook(book_path) then
+        -- A jump made in this subprocess never reaches the reader; the prompt on reopen offers it instead.
+        callback({
+            state = "progress-available",
+            book_path = book_path,
+            from_progress = local_percent,
+            to_progress = remote_progress.end_progress,
+        })
+    elseif decision == "apply" then
+        self.reading_progress_manager:applyProgress(remote_progress)
+
+        callback({
+            state = "progress-pulled",
+            book_path = book_path,
+            from_progress = local_percent,
+            to_progress = remote_progress.end_progress,
+        })
+    elseif decision == "keep-local" then
+        logger:info("Local progress is further ahead, not applying remote for:", book_path)
+        callback({
+            state = "progress-kept",
+            book_path = book_path,
+            local_progress = local_percent,
+            remote_progress = remote_progress.end_progress,
+        })
     end
 end
 
@@ -689,9 +742,10 @@ function GrimmorySynchronize:refreshBook(book_path, book_id, grimmory_id)
 end
 
 ---@param book Book
+---@param callback function
 ---@return string download_path
 ---@return boolean is_downloaded
-function GrimmorySynchronize:pullBook(book)
+function GrimmorySynchronize:pullBook(book, callback)
     local book_exists = false
     local is_downloaded = false
 
@@ -728,7 +782,7 @@ function GrimmorySynchronize:pullBook(book)
         -- After we're done, if the book exists we should attach it
         -- to associated shelves and pull the book progress.
         self:associateWithShelves(download_path, book.shelves or {})
-        self:pullBookProgress(download_path)
+        self:pullBookProgress(download_path, callback)
     end
 
     return download_path, is_downloaded
@@ -961,8 +1015,7 @@ function GrimmorySynchronize:synchronizeBook(book_path, refresh_book, callback)
         total_books = 1,
     })
 
-    -- Then, try to get progress
-    self:pullBookProgress(book_path)
+    self:pullBookProgress(book_path, callback)
 
     logger:info("Done synchronizing book:", book_path)
 end

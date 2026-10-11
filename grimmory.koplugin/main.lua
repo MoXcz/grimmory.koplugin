@@ -342,8 +342,13 @@ function Grimmory:pullProgressForOpenBook()
         function(run)
             local ok, latest_progress = run(
                 function()
-                    local _, _, latest_progress = self.reading_progress_manager:getNewerProgressForBook(book_path)
-                    return latest_progress
+                    local decision, _, remote_progress = self.reading_progress_manager:getPullDecision(book_path)
+
+                    if decision == "apply" then
+                        return remote_progress
+                    end
+
+                    return nil
                 end
             )
 

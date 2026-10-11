@@ -148,9 +148,9 @@ describe("GrimmorySynchronize", function()
     end)
 
     describe("pushBookProgress", function()
-        local progress = { book_path = "/books/a.epub", book_md5 = "abc", end_time = 200 }
+        local progress = { book_path = "/books/a.epub", book_md5 = "abc", end_time = 200, end_progress = 50 }
 
-        local function new_synchronizer(last_synced_at, push_ok)
+        local function new_synchronizer(last_synced_at, push_ok, push_decision, remote_percent)
             local repository = {
                 getReadingProgress = function() return true, progress end,
                 getBookSyncTimestamp = function() return true, last_synced_at end,
@@ -159,6 +159,9 @@ describe("GrimmorySynchronize", function()
 
             local reading_progress_manager = {
                 pushRemoteProgress = spy.new(function() return push_ok end),
+                getPushDecision = function()
+                    return push_decision or "push", remote_percent
+                end,
             }
 
             return GrimmorySynchronize:new({
@@ -177,6 +180,41 @@ describe("GrimmorySynchronize", function()
             assert.are.same({ "progress-pushed" }, states)
             assert.spy(synchronizer.repository.updateBookSyncTimestamp)
                 .was_called_with(synchronizer.repository, 1, "progress", 200)
+        end)
+
+        it("reports where the remote progress was before the push", function()
+            local synchronizer = new_synchronizer(100, true, "push", 20)
+
+            local progress_messages = {}
+            synchronizer:pushBookProgress(1, function(message)
+                table.insert(progress_messages, message)
+            end)
+
+            assert.are.equal(20, progress_messages[1].from_progress)
+            assert.are.equal(50, progress_messages[1].to_progress)
+        end)
+
+        it("does not push progress that would move the remote back", function()
+            local synchronizer = new_synchronizer(100, true, "keep-remote", 100)
+
+            local states, callback = collect_states()
+            synchronizer:pushBookProgress(1, callback)
+
+            assert.are.same({ "progress-kept" }, states)
+            assert.spy(synchronizer.reading_progress_manager.pushRemoteProgress).was_not_called()
+            assert.spy(synchronizer.repository.updateBookSyncTimestamp)
+                .was_called_with(synchronizer.repository, 1, "progress", 200)
+        end)
+
+        it("does not push blindly when the remote progress is unreadable", function()
+            local synchronizer = new_synchronizer(100, true, "unknown")
+
+            local states, callback = collect_states()
+            synchronizer:pushBookProgress(1, callback)
+
+            assert.are.same({ "progress-failed" }, states)
+            assert.spy(synchronizer.reading_progress_manager.pushRemoteProgress).was_not_called()
+            assert.spy(synchronizer.repository.updateBookSyncTimestamp).was_not_called()
         end)
 
         it("skips progress that is already synced", function()
@@ -208,6 +246,66 @@ describe("GrimmorySynchronize", function()
 
             assert.are.same({}, states)
             assert.spy(synchronizer.reading_progress_manager.pushRemoteProgress).was_not_called()
+        end)
+    end)
+
+    describe("pullBookProgress", function()
+        local remote_progress = { book_path = "/books/a.epub", end_progress = 60 }
+
+        local function new_synchronizer(decision, local_percent, is_open_book)
+            return GrimmorySynchronize:new({
+                settings = new_settings(),
+                reading_progress_manager = {
+                    getPullDecision = function() return decision, local_percent, remote_progress end,
+                    isOpenBook = function() return is_open_book == true end,
+                    applyProgress = spy.new(function() end),
+                },
+            })
+        end
+
+        it("applies newer remote progress and reports the change", function()
+            local synchronizer = new_synchronizer("apply", 30)
+
+            local progress_messages = {}
+            synchronizer:pullBookProgress("/books/a.epub", function(message)
+                table.insert(progress_messages, message)
+            end)
+
+            assert.spy(synchronizer.reading_progress_manager.applyProgress)
+                .was_called_with(synchronizer.reading_progress_manager, remote_progress)
+            assert.are.same({
+                { state = "progress-pulled", book_path = "/books/a.epub", from_progress = 30, to_progress = 60 },
+            }, progress_messages)
+        end)
+
+        it("only announces newer progress for the open book", function()
+            local synchronizer = new_synchronizer("apply", 30, true)
+
+            local states, callback = collect_states()
+            synchronizer:pullBookProgress("/books/a.epub", callback)
+
+            assert.are.same({ "progress-available" }, states)
+            assert.spy(synchronizer.reading_progress_manager.applyProgress).was_not_called()
+        end)
+
+        it("keeps local progress that is further ahead", function()
+            local synchronizer = new_synchronizer("keep-local", 100)
+
+            local states, callback = collect_states()
+            synchronizer:pullBookProgress("/books/a.epub", callback)
+
+            assert.are.same({ "progress-kept" }, states)
+            assert.spy(synchronizer.reading_progress_manager.applyProgress).was_not_called()
+        end)
+
+        it("stays silent when there is nothing to pull", function()
+            local synchronizer = new_synchronizer("none", 60)
+
+            local states, callback = collect_states()
+            synchronizer:pullBookProgress("/books/a.epub", callback)
+
+            assert.are.same({}, states)
+            assert.spy(synchronizer.reading_progress_manager.applyProgress).was_not_called()
         end)
     end)
 

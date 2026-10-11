@@ -36,6 +36,20 @@ local function compareProgress(progress_a, progress_b)
     end
 end
 
+-- Devices lay the same page out at slightly different percentages, so small gaps are not "behind".
+local BEHIND_TOLERANCE = 1.0
+
+---@param progress number | nil
+---@param other_progress number | nil
+---@return boolean
+local function isBehind(progress, other_progress)
+    if progress == nil or other_progress == nil then
+        return false
+    end
+
+    return progress < other_progress - BEHIND_TOLERANCE
+end
+
 ---@class ReadingProgressManager
 ---@field ui any
 ---@field api GrimmoryAPI
@@ -54,17 +68,69 @@ function ReadingProgressManager:new(o)
     return o
 end
 
-function ReadingProgressManager:getNewerProgressForBook(book_path)
-    -- Skip most recent session
-    local local_progress = self:getLocalProgressForBook(book_path)
-    local remote_name, remote_id, remote_progress = self:getRemoteProgressForBook(book_path)
+---@param book_path string
+---@return boolean
+function ReadingProgressManager:isOpenBook(book_path)
+    return self.ui ~= nil and self.ui.document ~= nil and self.ui.document.file == book_path
+end
 
-    if compareProgress(local_progress, remote_progress) <= 0 then
-        logger:dbg("No new progress for book:", book_path)
-        return nil, nil, nil
+---@alias ProgressPullDecision "apply" | "keep-local" | "none"
+
+---Remote progress replaces local only when it is newer and further ahead.
+---A newer local event wins even over a remote that is ahead, so a reread on this device is not undone.
+---@return ProgressPullDecision decision
+---@return number | nil local_percent
+---@return ReadingSessionProgress | nil remote_progress
+function ReadingProgressManager:getPullDecision(book_path)
+    local recorded_progress = self:getLocalProgressForBook(book_path)
+    local _, _, remote_progress = self:getRemoteProgressForBook(book_path)
+
+    -- The sidecar holds the real position, also for books read before the plugin recorded events.
+    local local_percent = self.doc_metadata:getProgressPercent(book_path)
+    if local_percent == nil and recorded_progress ~= nil then
+        local_percent = recorded_progress.end_progress
     end
 
-    return remote_name, remote_id, remote_progress
+    if remote_progress == nil or compareProgress(recorded_progress, remote_progress) <= 0 then
+        return "none", local_percent, remote_progress
+    end
+
+    if isBehind(remote_progress.end_progress, local_percent) then
+        return "keep-local", local_percent, remote_progress
+    end
+
+    if local_percent ~= nil and remote_progress.end_progress <= local_percent then
+        return "none", local_percent, remote_progress
+    end
+
+    return "apply", local_percent, remote_progress
+end
+
+---@alias ProgressPushDecision "push" | "keep-remote" | "unknown"
+
+---Local progress is pushed unless the server is already further ahead.
+---@param local_progress ReadingSessionProgress
+---@return ProgressPushDecision decision "unknown" when the server could not be asked
+---@return number | nil remote_percent
+function ReadingProgressManager:getPushDecision(local_progress)
+    local _, _, remote_progress, fetch_failed = self:getRemoteProgressForBook(
+        local_progress.book_path,
+        local_progress.book_md5
+    )
+
+    if fetch_failed then
+        return "unknown", nil
+    end
+
+    if remote_progress == nil then
+        return "push", nil
+    end
+
+    if isBehind(local_progress.end_progress, remote_progress.end_progress) then
+        return "keep-remote", remote_progress.end_progress
+    end
+
+    return "push", remote_progress.end_progress
 end
 
 ---@return ReadingSessionProgress | nil progress
@@ -161,18 +227,21 @@ function ReadingProgressManager:pushRemoteProgress(progress)
     return ok, result
 end
 
+---@param book_path string
+---@param book_md5? string known partial MD5, so the file does not have to be readable
 ---@return string | nil source_name
 ---@return string | nil source_id
 ---@return ReadingSessionProgress | nil progress
-function ReadingProgressManager:getRemoteProgressForBook(book_path)
+---@return boolean | nil fetch_failed true when the server could not be asked
+function ReadingProgressManager:getRemoteProgressForBook(book_path, book_md5)
     local koreader_auth_id, koreader_auth_secret = self:getCredentials()
 
     if koreader_auth_id == nil or koreader_auth_secret == nil then
         logger:dbg("Skipping progress push because no credentials")
-        return nil, nil, nil
+        return nil, nil, nil, true
     end
 
-    local partial_md5 = util.partialMD5(book_path)
+    local partial_md5 = book_md5 or util.partialMD5(book_path)
     if partial_md5 == nil then
         return nil, nil, nil
     end
@@ -188,7 +257,7 @@ function ReadingProgressManager:getRemoteProgressForBook(book_path)
         self.koreader_auth_secret_md5 = nil
 
         logger:err("Failed to get progress")
-        return nil, nil, nil
+        return nil, nil, nil, true
     end
 
     if progress == nil then

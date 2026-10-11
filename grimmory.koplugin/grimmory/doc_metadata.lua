@@ -200,6 +200,18 @@ function DocMetadata:clearProgress(path)
 end
 
 ---@param path string
+---@return number | nil percent
+function DocMetadata:getProgressPercent(path)
+    local percent_finished = self:getDocSettings(path):readSetting("percent_finished")
+
+    if type(percent_finished) ~= "number" then
+        return nil
+    end
+
+    return percent_finished * 100
+end
+
+---@param path string
 ---@param percent number | nil
 ---@param xpointer string | nil
 ---@param page number | nil

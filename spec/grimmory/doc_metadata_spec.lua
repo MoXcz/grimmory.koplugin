@@ -68,6 +68,24 @@ describe("GrimmoryDocMetadata", function()
         end
     end)
 
+    describe("getProgressPercent", function()
+        it("converts the sidecar fraction to a percentage", function()
+            fake_doc_settings.readSetting
+                .on_call_with(match._, "percent_finished")
+                .returns(0.34)
+
+            assert.are.equal(34, GrimmoryDocMetadata:new():getProgressPercent("/books/a.epub"))
+        end)
+
+        it("is nil for a book without stored progress", function()
+            fake_doc_settings.readSetting
+                .on_call_with(match._, "percent_finished")
+                .returns(nil)
+
+            assert.is_nil(GrimmoryDocMetadata:new():getProgressPercent("/books/a.epub"))
+        end)
+    end)
+
     describe("getIdentifier", function()
         it("reads value", function()
             fake_doc_settings.readSetting
