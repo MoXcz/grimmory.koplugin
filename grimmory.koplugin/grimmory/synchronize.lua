@@ -250,7 +250,7 @@ function GrimmorySynchronize:pushAllPendingBookMetadata(callback)
         pcall(self.pushBookMetadata, self, book_id, callback)
 
         callback({
-            state = "push-book-metadata",
+            state = "book-push-metadata",
             book_id = book_id,
             pushed_books = index,
             total_books = #book_ids,
