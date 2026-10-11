@@ -942,8 +942,7 @@ function GrimmorySynchronize:synchronizeBook(book_path, refresh_book, callback)
         end
     end
 
-    -- Pull annotations from Grimmory
-    if grimmory_id then
+    if grimmory_id and self.settings:getSyncAnnotations() then
         logger:info("Pushing book annotations:", book_path)
         self:pushBookAnnotations(book_path, grimmory_id)
 
