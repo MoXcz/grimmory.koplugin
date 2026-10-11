@@ -4,7 +4,6 @@ Grimmory KOReader Plugin
 @module koplugin.Grimmory
 --]]--
 local _ = require("gettext")
-local T = require("ffi/util").template
 
 local Dispatcher = require("dispatcher")
 local FileManager = require("apps/filemanager/filemanager")
@@ -19,6 +18,7 @@ local GrimmoryDialogManager = require("grimmory/ui/dialog_manager")
 local GrimmoryExecutor = require("grimmory/executor")
 local GrimmoryMenu = require("grimmory/ui/menu")
 local GrimmorySettings = require("grimmory/settings")
+local GrimmorySyncSummary = require("grimmory/ui/sync_summary")
 local GrimmoryAPI = require("grimmory/grimmory_api")
 local GrimmorySynchronize = require("grimmory/synchronize")
 local GrimmoryScheduler = require("grimmory/scheduler")
@@ -418,13 +418,15 @@ function Grimmory:onGrimmorySyncOpenBook(verbose)
     return self:onGrimmorySync(verbose, book_path)
 end
 
-function Grimmory:refreshUI()
-   if self.ui == nil then
-        return
-    end
-
-    if self.ui.document == nil or self.ui.document.file == nil then
+---@param after_refresh? function runs once the UI is back, after any document reload
+function Grimmory:refreshUI(after_refresh)
+    if self.ui == nil or self.ui.document == nil or self.ui.document.file == nil then
         logger:dbg("No file is open, cannot refresh")
+
+        if after_refresh then
+            after_refresh()
+        end
+
         return
     end
 
@@ -436,8 +438,8 @@ function Grimmory:refreshUI()
         pcall(self.ui.annotation.updateAnnotations, self.ui.annotation, true, true)
     end
 
-    -- Reload document so any changes apply
-    self.ui:reloadDocument()
+    -- A widget shown before the reload would end up hidden behind the reopened reader.
+    self.ui:reloadDocument(nil, nil, after_refresh)
 end
 
 function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
@@ -487,13 +489,8 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
         end
 
         local last_progress_step = 0
-        local session_count = 0
-        local session_error_count = 0
-        local progress_push_count = 0
-        local progress_error_count = 0
         local book_download_count = 0
-        local book_refresh_count = 0
-        local book_error_count = 0
+        local summary = GrimmorySyncSummary:new()
 
         local update_progress_step = function(progress_step)
             if progress_step <= last_progress_step then
@@ -559,15 +556,9 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
                     update_progress_step(4 + math.floor((viewed_books / total_books) * 5))
                 end
 
-                if progress.state == "session-recorded" then
-                    session_count = session_count + 1
-                elseif progress.state == "session-error" then
-                    session_error_count = session_error_count + 1
-                elseif progress.state == "progress-pushed" then
-                    progress_push_count = progress_push_count + 1
-                elseif progress.state == "progress-failed" then
-                    progress_error_count = progress_error_count + 1
-                elseif progress.state == "book-downloaded" then
+                summary:record(progress)
+
+                if progress.state == "book-downloaded" then
                     book_download_count = book_download_count + 1
 
                     if book_download_count % 20 == 0 then
@@ -580,11 +571,6 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
                         -- Also refresh collections in this process
                         ReadCollection:_read()
                     end
-
-                elseif progress.state == "book-error" then
-                    book_error_count = book_error_count + 1
-                elseif progress.state == "book-pull-metadata" then
-                    book_refresh_count = book_refresh_count + 1
                 end
             end
         )
@@ -637,42 +623,18 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
             end
         end
 
-        self:refreshUI()
-
         if verbose then
-            local message = {
-                _("Completed Grimmory sync")
-            }
-
-            if session_count > 0 then
-                table.insert(message, T(_("%1 session(s) recorded"), session_count))
+            local function show_summary()
+                if summary:hasDetails() then
+                    self.dialog_manager:showSyncSummary(summary:toKeyValuePairs())
+                else
+                    self.dialog_manager:toast(_("Completed Grimmory sync\nNothing to update"))
+                end
             end
 
-            if session_error_count > 0 then
-                table.insert(message, T(_("%1 session(s) failed"), session_error_count))
-            end
-
-            if progress_push_count > 0 then
-                table.insert(message, T(_("%1 progress update(s) pushed"), progress_push_count))
-            end
-
-            if progress_error_count > 0 then
-                table.insert(message, T(_("%1 progress update(s) failed"), progress_error_count))
-            end
-
-            if book_download_count > 0 then
-                table.insert(message, T(_("%1 book(s) downloaded"), book_download_count))
-            end
-
-            if book_refresh_count > 0 then
-                table.insert(message, T(_("%1 book(s) refreshed"), book_refresh_count))
-            end
-
-            if book_error_count > 0 then
-                table.insert(message, T(_("%1 book(s) failed"), book_error_count))
-            end
-
-            self.dialog_manager:toast(table.concat(message, "\n"))
+            self:refreshUI(show_summary)
+        else
+            self:refreshUI()
         end
     end
 

@@ -5,6 +5,7 @@ local ButtonDialog = require("ui/widget/buttondialog")
 local ConfirmBox = require("ui/widget/confirmbox")
 local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
+local KeyValuePage = require("ui/widget/keyvaluepage")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local UIManager = require("ui/uimanager")
 local PathChooser = require("ui/widget/pathchooser")
@@ -530,6 +531,14 @@ function DialogManager:showProgressDialog(title, dismiss_callback, dismiss_text)
     return update_callback, close_callback
 end
 
+---@param kv_pairs table[] rows from GrimmorySyncSummary:toKeyValuePairs
+function DialogManager:showSyncSummary(kv_pairs)
+    UIManager:show(KeyValuePage:new({
+        title = _("Grimmory Sync Summary"),
+        kv_pairs = kv_pairs,
+    }))
+end
+
 ---@param progress ReadingSessionProgress
 function DialogManager:showApplyProgressConfirmation(progress)
     -- TODO:
@@ -540,7 +549,7 @@ function DialogManager:showApplyProgressConfirmation(progress)
     local dialog = ConfirmBox:new({
         text = T(
             _("Go to latest location %1% from Grimmory?"),
-            tostring(progress.end_progress)
+            tostring(math.floor(progress.end_progress + 0.5))
         ),
         ok_callback = function()
             self.reading_progress_manager:applyProgress(progress)
