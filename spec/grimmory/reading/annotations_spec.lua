@@ -90,6 +90,7 @@ describe("GrimmoryReadingAnnotations", function()
 
         stub(fake_doc_metadata, "getAnnotations").returns({})
         stub(fake_doc_metadata, "setAnnotations")
+        stub(fake_doc_metadata, "getModifiedGrimmoryAnnotations").returns({})
     end)
 
     describe("mergeAnnotations", function()
@@ -146,6 +147,129 @@ describe("GrimmoryReadingAnnotations", function()
             )
         end)
 
+        it("keeps a pending edit instead of taking Grimmory's version", function()
+            local edited = {
+                grimmory_id = 27,
+                note = "edited on this device",
+                page = "start",
+                pos0 = "start",
+                pos1 = "end",
+            }
+            fake_doc_metadata.getAnnotations.returns({ edited })
+            fake_doc_metadata.getModifiedGrimmoryAnnotations.returns({ 27 })
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:applyAnnotations("book_path", { remote_grimmory_annotation })
+
+            assert.spy(fake_doc_metadata.setAnnotations).was_called_with(
+                match._,
+                match.same("book_path"),
+                match.same({
+                    {
+                        grimmory_id = 27,
+                        note = "edited on this device",
+                        page = "start",
+                        pos0 = "start",
+                        pos1 = "end",
+                    },
+                })
+            )
+        end)
+
+        it("does not bring back an annotation whose removal is still pending", function()
+            fake_doc_metadata.getModifiedGrimmoryAnnotations.returns({ 27 })
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:applyAnnotations("book_path", { remote_grimmory_annotation })
+
+            assert.spy(fake_doc_metadata.setAnnotations).was_called_with(
+                match._,
+                match.same("book_path"),
+                match.same({})
+            )
+        end)
+
+        it("takes Grimmory's style and note but keeps the local position", function()
+            local linked = { grimmory_id = 27, page = "start", pos0 = "start", pos1 = "end", note = "old" }
+            fake_doc_metadata.getAnnotations.returns({ linked })
+            fake_cfi_resolver.cfiRangeToXPointers = spy.new(function() return "moved", "elsewhere" end)
+
+            local remote = {
+                id = 27,
+                cfi = "cfi",
+                color = "#4ADE80",
+                style = "underline",
+                note = "new",
+            }
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:applyAnnotations("book_path", { remote })
+
+            assert.spy(fake_doc_metadata.setAnnotations).was_called_with(
+                match._,
+                match.same("book_path"),
+                match.same({
+                    {
+                        grimmory_id = 27,
+                        page = "start",
+                        pos0 = "start",
+                        pos1 = "end",
+                        note = "new",
+                        color = "green",
+                        drawer = "underscore",
+                    },
+                })
+            )
+        end)
+
+        it("keeps a pending local annotation whose Grimmory copy is gone", function()
+            fake_doc_metadata.getAnnotations.returns({ local_grimmory_annotation })
+            fake_doc_metadata.getModifiedGrimmoryAnnotations.returns({ 27 })
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:applyAnnotations("book_path", {})
+
+            assert.spy(fake_doc_metadata.setAnnotations).was_called_with(
+                match._,
+                match.same("book_path"),
+                match.same({ local_grimmory_annotation })
+            )
+        end)
+
+        it("gives an annotation with an empty Grimmory note no note", function()
+            local remote = { id = 31, cfi = "cfi", note = "" }
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:applyAnnotations("book_path", { remote })
+
+            local saved = fake_doc_metadata.setAnnotations.calls[1].vals[3]
+            assert.is_nil(saved[1].note)
+        end)
+
+        it("skips Grimmory annotations at held back CFIs but keeps the local ones linked to them", function()
+            fake_doc_metadata.getAnnotations.returns({
+                { grimmory_id = 31, pos0 = "start", pos1 = "end", color = "yellow", drawer = "lighten" },
+            })
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:applyAnnotations("book_path", {
+                { id = 31, cfi = "cfi-a", style = "underline", created_at = 1781321340 },
+                { id = 32, cfi = "cfi-b", style = "underline", created_at = 1781321340 },
+            }, { ["cfi-a"] = true, ["cfi-b"] = true })
+
+            assert.spy(fake_doc_metadata.setAnnotations).was_called_with(
+                match._,
+                match.same("book_path"),
+                match.same({ { grimmory_id = 31, pos0 = "start", pos1 = "end", color = "yellow", drawer = "lighten" } })
+            )
+        end)
+
         it("leaves annotations untouched when the book cannot be opened", function()
             opened_document = nil
             fake_doc_metadata.getAnnotations.returns({ local_grimmory_annotation })
@@ -179,6 +303,7 @@ describe("GrimmoryReadingAnnotations", function()
             assert.equal(1, #actual)
             assert.equal("#FFC107", actual[1].color)
             assert.equal("highlight", actual[1].style)
+            assert.equal(1, actual[1].local_index)
         end)
 
         it("returns nothing when the book cannot be opened", function()
@@ -188,6 +313,32 @@ describe("GrimmoryReadingAnnotations", function()
             local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
 
             assert.is_false((annotations:getAnnotations("book_path")))
+        end)
+    end)
+
+    describe("setGrimmoryIds", function()
+        it("stores IDs on the annotations at the given positions", function()
+            local first = { pos0 = "a", pos1 = "b" }
+            local second = { pos0 = "c", pos1 = "d", grimmory_id = 3 }
+            local third = { pos0 = "e", pos1 = "f" }
+            fake_doc_metadata.getAnnotations.returns({ first, second, third })
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:setGrimmoryIds("book_path", {
+                { index = 1, grimmory_id = 41 },
+                { index = 3, grimmory_id = 42 },
+            })
+
+            assert.spy(fake_doc_metadata.setAnnotations).was_called_with(
+                match._,
+                match.same("book_path"),
+                match.same({
+                    { pos0 = "a", pos1 = "b", grimmory_id = 41 },
+                    { pos0 = "c", pos1 = "d", grimmory_id = 3 },
+                    { pos0 = "e", pos1 = "f", grimmory_id = 42 },
+                })
+            )
         end)
     end)
 end)

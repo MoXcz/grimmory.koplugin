@@ -114,11 +114,12 @@ local function is_same_xpointer(a, b)
     return normalize_xpointer(a) == normalize_xpointer(b)
 end
 
----@param book_path string
-local function merge_annotations(local_annotations, remote_annotations)
+---@param is_remote_id { [string]: boolean } every Grimmory ID on the server, placeable or not
+---@param is_pending_id { [string]: boolean } IDs whose local edit or removal has not reached Grimmory yet
+local function merge_annotations(local_annotations, remote_annotations, is_remote_id, is_pending_id)
     local remote_grimmory_ids = {}
     for _, a in ipairs(remote_annotations) do
-        if a.grimmory_id ~= nil then
+        if a.grimmory_id ~= nil and not is_pending_id[tostring(a.grimmory_id)] then
             remote_grimmory_ids[tostring(a.grimmory_id)] = a
         end
     end
@@ -129,11 +130,13 @@ local function merge_annotations(local_annotations, remote_annotations)
     -- Filter out existing records with Grimmory IDs that do not
     -- exist on the Grimmory side anymore.
     for _, a in ipairs(local_annotations) do
-        if a.grimmory_id ~= nil then
-            local_grimmory_ids[tostring(a.grimmory_id)] = a
+        local key = a.grimmory_id ~= nil and tostring(a.grimmory_id) or nil
+
+        if key ~= nil then
+            local_grimmory_ids[key] = a
         end
 
-        if a.grimmory_id == nil or remote_grimmory_ids[tostring(a.grimmory_id)] then
+        if key == nil or is_remote_id[key] or is_pending_id[key] then
             table.insert(new_annotations, a)
         end
     end
@@ -169,18 +172,13 @@ local function merge_annotations(local_annotations, remote_annotations)
                 table.insert(new_annotations, annotation)
             end
         else
-            -- Apply to matching grimmory ID
             local existing_annotation = local_grimmory_ids[grimmory_id]
 
-            existing_annotation.pos0 = annotation.pos0
-            existing_annotation.pos1 = annotation.pos1
-            existing_annotation.datetime = annotation.datetime
+            -- Grimmory never moves an annotation, so only what it can change is taken; the local position
+            -- stays exact instead of going through the CFI round trip.
             existing_annotation.datetime_updated = annotation.datetime_updated
             existing_annotation.color = annotation.color
             existing_annotation.drawer = annotation.drawer
-            existing_annotation.chapter = annotation.chapter
-            existing_annotation.text = annotation.text
-            existing_annotation.page = annotation.page
             existing_annotation.note = annotation.note
         end
     end
@@ -193,40 +191,55 @@ local function merge_annotations(local_annotations, remote_annotations)
     return new_annotations
 end
 
+---@param cfi_resolver GrimmoryCFIResolver
+---@param annotation GrimmoryAnnotation
+---@return table koreader_annotation
+local function to_koreader_annotation(cfi_resolver, annotation)
+    local xpointer_start, xpointer_end = cfi_resolver:cfiRangeToXPointers(annotation.cfi)
+
+    return {
+        grimmory_id = annotation.id,
+
+        datetime = GrimmoryDatetime.toAnnotationDatetime(annotation.created_at),
+        datetime_updated = GrimmoryDatetime.toAnnotationDatetime(annotation.updated_at),
+
+        color = GRIMMORY_COLOR_MAP[annotation.color] or DEFAULT_KOREADER_COLOR,
+        drawer = GRIMMORY_STYLE_MAP[annotation.style] or DEFAULT_KOREADER_STYLE,
+
+        chapter = annotation.chapter,
+        text = annotation.text,
+        -- A note cleared on a device reaches Grimmory as empty; KOReader expects none.
+        note = annotation.note ~= "" and annotation.note or nil,
+
+        page = xpointer_start,
+
+        pos0 = xpointer_start,
+        pos1 = xpointer_end,
+    }
+end
+
 ---@param book_path string
 ---@param annotations GrimmoryAnnotation[]
+---@param held_back_cfis? { [string]: boolean } CFIs of local annotations a failed push left unlinked
 ---@return boolean ok false when the book could not be read, leaving its annotations untouched
-function GrimmoryReadingAnnotations:applyAnnotations(book_path, grimmory_annotations)
+function GrimmoryReadingAnnotations:applyAnnotations(book_path, grimmory_annotations, held_back_cfis)
     local remote_annotations = {}
+    local is_remote_id = {}
+    held_back_cfis = held_back_cfis or {}
 
     local resolved = with_cfi_resolver(
         book_path,
         function (cfi_resolver)
             for _, annotation in ipairs(grimmory_annotations) do
-                local xpointer_start, xpointer_end = cfi_resolver:cfiRangeToXPointers(
-                    annotation.cfi
-                )
+                is_remote_id[tostring(annotation.id)] = true
 
-                local koreader_annotation = {
-                    grimmory_id = annotation.id,
+                -- Probably what the failed create stored; importing it would duplicate the local annotation.
+                local koreader_annotation = not held_back_cfis[annotation.cfi]
+                    and to_koreader_annotation(cfi_resolver, annotation)
 
-                    datetime = GrimmoryDatetime.toAnnotationDatetime(annotation.created_at),
-                    datetime_updated = GrimmoryDatetime.toAnnotationDatetime(annotation.updated_at),
-
-                    color = GRIMMORY_COLOR_MAP[annotation.color] or DEFAULT_KOREADER_COLOR,
-                    drawer = GRIMMORY_STYLE_MAP[annotation.style] or DEFAULT_KOREADER_STYLE,
-
-                    chapter = annotation.chapter,
-                    text = annotation.text,
-                    note = annotation.note,
-
-                    page = xpointer_start,
-
-                    pos0 = xpointer_start,
-                    pos1 = xpointer_end,
-                }
-
-                table.insert(remote_annotations, koreader_annotation)
+                if koreader_annotation then
+                    table.insert(remote_annotations, koreader_annotation)
+                end
             end
         end
     )
@@ -236,9 +249,14 @@ function GrimmoryReadingAnnotations:applyAnnotations(book_path, grimmory_annotat
         return false
     end
 
+    local is_pending_id = {}
+    for _, modified_id in ipairs(self.doc_metadata:getModifiedGrimmoryAnnotations(book_path)) do
+        is_pending_id[tostring(modified_id)] = true
+    end
+
     local local_annotations = self.doc_metadata:getAnnotations(book_path)
 
-    local new_annotations = merge_annotations(local_annotations, remote_annotations)
+    local new_annotations = merge_annotations(local_annotations, remote_annotations, is_remote_id, is_pending_id)
 
     self.doc_metadata:setAnnotations(book_path, new_annotations)
 
@@ -255,13 +273,14 @@ function GrimmoryReadingAnnotations:getAnnotations(book_path)
     local resolved = with_cfi_resolver(
         book_path,
         function(cfi_resolver)
-            for _, annotation in ipairs(annotations) do
+            for index, annotation in ipairs(annotations) do
                 -- Annotations without pos0 / pos1 are bookmarks
                 if annotation.pos0 ~= nil and annotation.pos1 ~= nil then
                     ---@type GrimmoryAnnotation
                     local grimmory_annotation = {
                         id = annotation.grimmory_id,
                         book_id = -1,
+                        local_index = index,
                         created_at = GrimmoryDatetime.fromAnnotationDatetime(annotation.datetime),
                         updated_at = GrimmoryDatetime.fromAnnotationDatetime(annotation.datetime_updated),
                         cfi = cfi_resolver:xpointerRangeToCFI(annotation.pos0, annotation.pos1),
@@ -283,6 +302,22 @@ function GrimmoryReadingAnnotations:getAnnotations(book_path)
     end
 
     return true, grimmory_annotations
+end
+
+---@param book_path string
+---@param updates { index: integer, grimmory_id: integer }[] `index` is a GrimmoryAnnotation's local_index
+function GrimmoryReadingAnnotations:setGrimmoryIds(book_path, updates)
+    local annotations = self.doc_metadata:getAnnotations(book_path)
+
+    for _, update in ipairs(updates) do
+        local annotation = annotations[update.index]
+
+        if annotation then
+            annotation.grimmory_id = update.grimmory_id
+        end
+    end
+
+    self.doc_metadata:setAnnotations(book_path, annotations)
 end
 
 return GrimmoryReadingAnnotations

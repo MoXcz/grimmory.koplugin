@@ -195,8 +195,181 @@ function GrimmorySynchronize:pushBookSessions(book_id, callback)
     end
 end
 
+---@class GrimmoryAnnotationPush
+---@field book_path string
+---@field book_grimmory_id integer
+---@field remote_by_id { [string]: GrimmoryAnnotation }
+---@field remote_by_cfi { [string]: GrimmoryAnnotation }
+---@field is_linked_id { [string]: boolean } Grimmory IDs a local annotation points at
+---@field id_updates { index: integer, grimmory_id: integer }[] IDs to save on the local annotations
+---@field unlinked GrimmoryAnnotation[] annotations whose create failed, perhaps after Grimmory stored them
+
+---@param push GrimmoryAnnotationPush
+---@param remote_annotations GrimmoryAnnotation[]
+local function index_remote_annotations(push, remote_annotations)
+    push.remote_by_id = {}
+    push.remote_by_cfi = {}
+
+    for _, remote in ipairs(remote_annotations) do
+        push.remote_by_id[tostring(remote.id)] = remote
+
+        if remote.cfi ~= nil then
+            push.remote_by_cfi[remote.cfi] = remote
+        end
+    end
+end
+
+---@param push GrimmoryAnnotationPush
+---@param annotation GrimmoryAnnotation
+---@param grimmory_id integer
+function GrimmorySynchronize:linkAnnotation(push, annotation, grimmory_id)
+    table.insert(push.id_updates, { index = annotation.local_index, grimmory_id = grimmory_id })
+
+    if annotation.id ~= nil then
+        push.is_linked_id[tostring(annotation.id)] = nil
+    end
+
+    annotation.id = grimmory_id
+    push.is_linked_id[tostring(grimmory_id)] = true
+end
+
+---Links to the Grimmory annotation at the same CFI when no local one claims it, keeping this device's style.
+---@param push GrimmoryAnnotationPush
+---@param annotation GrimmoryAnnotation
+---@return boolean linked
+function GrimmorySynchronize:linkExistingAnnotation(push, annotation)
+    local existing = push.remote_by_cfi[annotation.cfi]
+
+    if existing == nil or push.is_linked_id[tostring(existing.id)] then
+        return false
+    end
+
+    self:linkAnnotation(push, annotation, existing.id)
+
+    -- A highlight without a note says nothing about the note, so Grimmory's stays.
+    local is_different = (
+        existing.color ~= annotation.color or
+        existing.style ~= annotation.style or
+        (annotation.note ~= nil and (existing.note or "") ~= annotation.note)
+    )
+
+    if is_different then
+        local note = annotation.note or existing.note
+        local updated = self.api:updateAnnotation(existing.id, annotation.color, annotation.style, note)
+
+        -- Pending edits survive the pull, so a failed update is retried instead of taking Grimmory's version.
+        if not updated then
+            self.doc_metadata:appendModifiedGrimmoryAnnotation(push.book_path, existing.id)
+        end
+    end
+
+    return true
+end
+
+---Grimmory refuses a second annotation at one CFI, so one already there is linked instead.
+---@param push GrimmoryAnnotationPush
+---@param annotation GrimmoryAnnotation
+function GrimmorySynchronize:createOrLinkAnnotation(push, annotation)
+    if self:linkExistingAnnotation(push, annotation) then
+        return
+    end
+
+    local created_ok, created_id_or_error = self.api:createAnnotation(
+        push.book_grimmory_id,
+        annotation.cfi,
+        annotation.chapter,
+        annotation.text,
+        annotation.color,
+        annotation.style,
+        annotation.note
+    )
+
+    if created_ok and created_id_or_error ~= nil then
+        self:linkAnnotation(push, annotation, created_id_or_error)
+        return
+    end
+
+    logger:err("Failed to push annotation", created_id_or_error)
+    table.insert(push.unlinked, annotation)
+end
+
+---Updates in place when the position is unchanged, else creates the new copy before the old one goes.
+---@param push GrimmoryAnnotationPush
+---@param annotation GrimmoryAnnotation
+function GrimmorySynchronize:pushEditedAnnotation(push, annotation)
+    local edited_id = annotation.id
+    local remote = push.remote_by_id[tostring(edited_id)]
+
+    if remote ~= nil and remote.cfi == annotation.cfi then
+        if self.api:updateAnnotation(edited_id, annotation.color, annotation.style, annotation.note) then
+            self.doc_metadata:removeModifiedGrimmoryAnnotation(push.book_path, edited_id)
+        end
+
+        return
+    end
+
+    -- The old ID stays in the modified list, so the removal pass deletes its Grimmory copy.
+    self:createOrLinkAnnotation(push, annotation)
+end
+
+---@param push GrimmoryAnnotationPush
+---@param grimmory_id integer
+function GrimmorySynchronize:pushRemovedAnnotation(push, grimmory_id)
+    -- Only delete what Grimmory still lists: it answers 5xx instead of 404 for missing ones
+    -- (grimmory-tools/grimmory#1858).
+    if push.remote_by_id[tostring(grimmory_id)] ~= nil and not self.api:deleteAnnotation(grimmory_id) then
+        logger:err("Failed to delete annotation from Grimmory, retrying next sync:", grimmory_id)
+        return
+    end
+
+    self.doc_metadata:removeModifiedGrimmoryAnnotation(push.book_path, grimmory_id)
+end
+
+---@param push GrimmoryAnnotationPush
+---@param local_annotations GrimmoryAnnotation[]
+---@param is_modified_by_id { [string]: boolean }
+function GrimmorySynchronize:pushLocalChanges(push, local_annotations, is_modified_by_id)
+    for _, annotation in ipairs(local_annotations) do
+        if annotation.id == nil then
+            self:createOrLinkAnnotation(push, annotation)
+        elseif is_modified_by_id[tostring(annotation.id)] then
+            self:pushEditedAnnotation(push, annotation)
+        end
+    end
+end
+
+---A create whose answer was lost may still have been stored, so the list is read again, once, to link it.
+---@param push GrimmoryAnnotationPush
+---@return { [string]: boolean } unchecked_cfis CFIs of failed creates that could not be checked
+function GrimmorySynchronize:linkLostCreates(push)
+    if #push.unlinked == 0 then
+        return {}
+    end
+
+    local remote_ok, remote_annotations = self.api:getAnnotations(push.book_grimmory_id)
+
+    if not remote_ok then
+        local unchecked_cfis = {}
+        for _, annotation in ipairs(push.unlinked) do
+            unchecked_cfis[annotation.cfi] = true
+        end
+
+        return unchecked_cfis
+    end
+
+    index_remote_annotations(push, remote_annotations)
+
+    for _, annotation in ipairs(push.unlinked) do
+        self:linkExistingAnnotation(push, annotation)
+    end
+
+    return {}
+end
+
+---Edits that fail stay in the modified list, which also keeps the following pull from overwriting them.
 ---@param book_path string
 ---@param book_grimmory_id integer
+---@return { [string]: boolean } unchecked_cfis CFIs the pull must not import, as they may duplicate a local annotation
 function GrimmorySynchronize:pushBookAnnotations(book_path, book_grimmory_id)
     local read_ok, local_annotations = self.reading_annotations:getAnnotations(book_path)
 
@@ -204,52 +377,65 @@ function GrimmorySynchronize:pushBookAnnotations(book_path, book_grimmory_id)
         error("Could not read annotations", 0)
     end
 
-    local modified_grimmory_annotations = self.doc_metadata:getModifiedGrimmoryAnnotations(book_path)
+    local remote_ok, remote_annotations = self.api:getAnnotations(book_grimmory_id)
 
-    local is_modified_by_id = {}
-    for _, modified_id in ipairs(modified_grimmory_annotations) do
-        is_modified_by_id[tostring(modified_id)] = true
-
-        logger:dbg("Deleting annotation from Grimmory:", book_path, "-", modified_id)
-        self.api:deleteAnnotation(modified_id)
-
-        -- Even if the delete fails - which it does today with a 5xx instead of 404 - we
-        -- should continue to remove the annotation and assume it's just gone.
-        --
-        -- Once this bug (grimmory-tools/grimmory#1858) is fixed we can add the check
-        -- back in for the `ok` of `deleteAnnotation` calls.
-        self.doc_metadata:removeModifiedGrimmoryAnnotation(book_path, modified_id)
+    if not remote_ok then
+        error("Could not read annotations from Grimmory", 0)
     end
+
+    ---@type GrimmoryAnnotationPush
+    local push = {
+        book_path = book_path,
+        book_grimmory_id = book_grimmory_id,
+        is_linked_id = {},
+        id_updates = {},
+        unlinked = {},
+    }
+
+    index_remote_annotations(push, remote_annotations)
 
     for _, annotation in ipairs(local_annotations) do
-        if annotation.id ~= nil and is_modified_by_id[tostring(annotation.id)] then
-            annotation.id = nil
-        end
-
-        if annotation.id == nil then
-            -- This is a "new" annotation.
-            local create_ok, remote_annotation = self.api:createAnnotation(
-                book_grimmory_id,
-                annotation.cfi,
-                annotation.chapter,
-                annotation.text,
-                annotation.color,
-                annotation.style,
-                annotation.note
-            )
-
-            if create_ok then
-                logger:dbg("Created annotation for book:", book_path)
-            else
-                logger:err("Failed to push annotation", remote_annotation)
-            end
+        if annotation.id ~= nil then
+            push.is_linked_id[tostring(annotation.id)] = true
         end
     end
+
+    local modified_ids = self.doc_metadata:getModifiedGrimmoryAnnotations(book_path)
+
+    local is_modified_by_id = {}
+    for _, modified_id in ipairs(modified_ids) do
+        is_modified_by_id[tostring(modified_id)] = true
+    end
+
+    local unchecked_cfis = {}
+    local changes_ok, changes_error = pcall(function()
+        self:pushLocalChanges(push, local_annotations, is_modified_by_id)
+        unchecked_cfis = self:linkLostCreates(push)
+    end)
+
+    -- Saved before any removal: a sync killed in between would otherwise leave a moved annotation on a
+    -- deleted ID. One write covers them all; if the sync dies first, the next one links them again by CFI.
+    if #push.id_updates > 0 then
+        self.reading_annotations:setGrimmoryIds(book_path, push.id_updates)
+    end
+
+    if not changes_ok then
+        error(changes_error, 0)
+    end
+
+    for _, modified_id in ipairs(modified_ids) do
+        if not push.is_linked_id[tostring(modified_id)] then
+            self:pushRemovedAnnotation(push, modified_id)
+        end
+    end
+
+    return unchecked_cfis
 end
 
 ---@param book_path string
 ---@param book_grimmory_id integer
-function GrimmorySynchronize:pullBookAnnotations(book_path, book_grimmory_id)
+---@param held_back_cfis? { [string]: boolean } CFIs whose Grimmory annotations are not imported this time
+function GrimmorySynchronize:pullBookAnnotations(book_path, book_grimmory_id, held_back_cfis)
     local annotations_ok, annotations = self.api:getAnnotations(book_grimmory_id)
 
     if not annotations_ok or annotations == nil then
@@ -259,7 +445,7 @@ function GrimmorySynchronize:pullBookAnnotations(book_path, book_grimmory_id)
 
     logger:dbg("Writing annotations to:", book_path)
 
-    if not self.reading_annotations:applyAnnotations(book_path, annotations) then
+    if not self.reading_annotations:applyAnnotations(book_path, annotations, held_back_cfis) then
         error("Could not apply annotations", 0)
     end
 end
@@ -277,10 +463,10 @@ function GrimmorySynchronize:synchronizeBookAnnotations(book_path, book_grimmory
 
     local annotations_ok, annotations_error = pcall(function()
         logger:info("Pushing book annotations:", book_path)
-        self:pushBookAnnotations(book_path, book_grimmory_id)
+        local unchecked_cfis = self:pushBookAnnotations(book_path, book_grimmory_id)
 
         logger:info("Pulling book annotations:", book_path)
-        self:pullBookAnnotations(book_path, book_grimmory_id)
+        self:pullBookAnnotations(book_path, book_grimmory_id, unchecked_cfis)
     end)
 
     if not annotations_ok then

@@ -58,6 +58,7 @@ package.preload["ltn12"] = function()
 end
 
 local requests = {}
+local sent_bodies = {}
 local valid_tokens = {}
 local login_count = 0
 local refresh_count = 0
@@ -67,6 +68,10 @@ local books_page = {}
 
 local function fake_request(request)
     table.insert(requests, request.url)
+
+    if request.source ~= nil then
+        table.insert(sent_bodies, (dkjson.decode(request.source)))
+    end
 
     local code, body
 
@@ -88,6 +93,8 @@ local function fake_request(request)
             code, body = 401, { message = "Unauthorized" }
         elseif request.url:match("/api/v1/books/page") then
             code, body = 200, { content = books_page, page = { totalElements = #books_page } }
+        elseif request.url:match("/api/v1/annotations$") then
+            code, body = 200, { id = 41 }
         else
             code, body = 200, { current = "1.0.0" }
         end
@@ -158,6 +165,7 @@ describe("GrimmoryAPI", function()
     before_each(function()
         stored_files = {}
         requests = {}
+        sent_bodies = {}
         valid_tokens = {}
         login_count = 0
         refresh_count = 0
@@ -305,6 +313,21 @@ describe("GrimmoryAPI", function()
             assert.is_truthy(requests[#requests]:find("size=100&page=0", 1, true))
             assert.is_true(books[1].has_koreader_progress)
             assert.is_false(books[2].has_koreader_progress)
+        end)
+    end)
+
+    describe("annotations", function()
+        it("returns the ID Grimmory gives a new annotation", function()
+            local ok, id = new_api():createAnnotation(5, "cfi-a", "Chapter", "text", "#FFC107", "highlight", nil)
+
+            assert.is_true(ok)
+            assert.are.equal(41, id)
+        end)
+
+        it("sends a cleared note as empty so Grimmory clears it too", function()
+            assert.is_true((new_api():updateAnnotation(41, "#FFC107", "highlight", nil)))
+
+            assert.are.equal("", sent_bodies[#sent_bodies].note)
         end)
     end)
 end)

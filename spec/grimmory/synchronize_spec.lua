@@ -739,22 +739,423 @@ describe("GrimmorySynchronize", function()
     end)
 
     describe("pushBookAnnotations", function()
-        it("fails before touching Grimmory when the annotations cannot be read", function()
-            local synchronizer = GrimmorySynchronize:new({
-                reading_annotations = { getAnnotations = function() return false, nil end },
-                doc_metadata = {
-                    getModifiedGrimmoryAnnotations = function() return { 9 } end,
-                    removeModifiedGrimmoryAnnotation = spy.new(function() end),
+        ---@param options table annotations, modified IDs and the API answers (create_result, update_ok, delete_ok,
+        ---refresh_ok and refreshed_remote_annotations for the reads after the first)
+        local function new_synchronizer(options)
+            local remote_reads = 0
+
+            return GrimmorySynchronize:new({
+                reading_annotations = {
+                    getAnnotations = function()
+                        return options.local_annotations ~= nil, options.local_annotations
+                    end,
+                    setGrimmoryIds = spy.new(function() end),
                 },
-                api = { deleteAnnotation = spy.new(function() return true end) },
+                doc_metadata = {
+                    getModifiedGrimmoryAnnotations = function() return options.modified_ids or {} end,
+                    removeModifiedGrimmoryAnnotation = spy.new(function() end),
+                    appendModifiedGrimmoryAnnotation = spy.new(function() end),
+                },
+                api = {
+                    getAnnotations = spy.new(function()
+                        remote_reads = remote_reads + 1
+
+                        if remote_reads > 1 and options.refresh_ok == false then
+                            return false, nil
+                        end
+
+                        if remote_reads > 1 and options.refreshed_remote_annotations ~= nil then
+                            return true, options.refreshed_remote_annotations
+                        end
+
+                        return options.remote_ok ~= false, options.remote_annotations or {}
+                    end),
+                    createAnnotation = spy.new(function()
+                        return options.create_result ~= false, options.create_result
+                    end),
+                    updateAnnotation = spy.new(function() return options.update_ok ~= false end),
+                    deleteAnnotation = spy.new(function() return options.delete_ok ~= false end),
+                },
             })
+        end
+
+        local function annotation(overrides)
+            local base = { local_index = 1, cfi = "cfi-a", color = "#FFC107", style = "highlight", text = "text" }
+
+            for key, value in pairs(overrides or {}) do
+                base[key] = value
+            end
+
+            return base
+        end
+
+        it("stores the ID Grimmory assigns to a new annotation", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ local_index = 2 }) },
+                create_result = 41,
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 2, grimmory_id = 41 } }
+            )
+            assert.spy(synchronizer.api.getAnnotations).was_called(1)
+        end)
+
+        it("links a new annotation to the unlinked one Grimmory already has at its CFI", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation() },
+                remote_annotations = { { id = 9, cfi = "cfi-a", color = "#FFC107", style = "highlight" } },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.createAnnotation).was_not_called()
+            assert.spy(synchronizer.api.updateAnnotation).was_not_called()
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 1, grimmory_id = 9 } }
+            )
+        end)
+
+        it("keeps this device's note when linking to an existing Grimmory annotation", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ note = "mine" }) },
+                remote_annotations = { { id = 9, cfi = "cfi-a", color = "#FFC107", style = "highlight" } },
+                update_ok = false,
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.updateAnnotation)
+                .was_called_with(synchronizer.api, 9, "#FFC107", "highlight", "mine")
+            assert.spy(synchronizer.doc_metadata.appendModifiedGrimmoryAnnotation)
+                .was_called_with(synchronizer.doc_metadata, "/books/a.epub", 9)
+        end)
+
+        it("leaves Grimmory's note alone when linking a highlight without one", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation() },
+                remote_annotations = {
+                    { id = 9, cfi = "cfi-a", color = "#FFC107", style = "highlight", note = "theirs" },
+                },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.updateAnnotation).was_not_called()
+        end)
+
+        it("keeps Grimmory's note when linking a restyled highlight without one", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ color = "#E91E63" }) },
+                remote_annotations = {
+                    { id = 9, cfi = "cfi-a", color = "#FFC107", style = "highlight", note = "theirs" },
+                },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.updateAnnotation)
+                .was_called_with(synchronizer.api, 9, "#E91E63", "highlight", "theirs")
+        end)
+
+        it("updates a linked annotation whose style differs", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ style = "underline" }) },
+                remote_annotations = { { id = 9, cfi = "cfi-a", color = "#FFC107", style = "highlight" } },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.updateAnnotation)
+                .was_called_with(synchronizer.api, 9, "#FFC107", "underline", nil)
+        end)
+
+        it("treats an empty note like a missing one when linking", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ note = "" }) },
+                remote_annotations = { { id = 9, cfi = "cfi-a", color = "#FFC107", style = "highlight" } },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.updateAnnotation).was_not_called()
+        end)
+
+        it("updates an edited annotation in place when it has not moved", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ id = 7, note = "new note" }) },
+                remote_annotations = { { id = 7, cfi = "cfi-a" } },
+                modified_ids = { 7 },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.updateAnnotation)
+                .was_called_with(synchronizer.api, 7, "#FFC107", "highlight", "new note")
+            assert.spy(synchronizer.api.createAnnotation).was_not_called()
+            assert.spy(synchronizer.api.deleteAnnotation).was_not_called()
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation)
+                .was_called_with(synchronizer.doc_metadata, "/books/a.epub", 7)
+        end)
+
+        it("keeps an edit pending when updating it fails", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ id = 7 }) },
+                remote_annotations = { { id = 7, cfi = "cfi-a" } },
+                modified_ids = { 7 },
+                update_ok = false,
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation).was_not_called()
+        end)
+
+        it("creates a moved annotation before deleting its old copy", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ id = 7, cfi = "cfi-b" }) },
+                remote_annotations = { { id = 7, cfi = "cfi-a" } },
+                modified_ids = { 7 },
+                create_result = 42,
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 1, grimmory_id = 42 } }
+            )
+            assert.spy(synchronizer.api.deleteAnnotation).was_called_with(synchronizer.api, 7)
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation)
+                .was_called_with(synchronizer.doc_metadata, "/books/a.epub", 7)
+        end)
+
+        it("keeps a moved annotation and its old copy when creating it fails", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ id = 7, cfi = "cfi-b" }) },
+                remote_annotations = { { id = 7, cfi = "cfi-a" } },
+                modified_ids = { 7 },
+                create_result = false,
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.deleteAnnotation).was_not_called()
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_not_called()
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation).was_not_called()
+        end)
+
+        it("keeps a removal pending when deleting the Grimmory copy fails", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = {},
+                remote_annotations = { { id = 9, cfi = "cfi-a" } },
+                modified_ids = { 9 },
+                delete_ok = false,
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.deleteAnnotation).was_called_with(synchronizer.api, 9)
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation).was_not_called()
+        end)
+
+        it("forgets a removal that Grimmory no longer has", function()
+            local synchronizer = new_synchronizer({ local_annotations = {}, modified_ids = { 9 } })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.deleteAnnotation).was_not_called()
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation)
+                .was_called_with(synchronizer.doc_metadata, "/books/a.epub", 9)
+        end)
+
+        it("links to the copy a create that seemed to fail left on Grimmory", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation() },
+                create_result = false,
+                refreshed_remote_annotations = { { id = 12, cfi = "cfi-a", color = "#FFC107", style = "highlight" } },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 1, grimmory_id = 12 } }
+            )
+        end)
+
+        it("reads Grimmory again only once for all creates that seemed to fail", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ local_index = 1 }), annotation({ local_index = 2, cfi = "cfi-b" }) },
+                create_result = false,
+                refreshed_remote_annotations = {
+                    { id = 12, cfi = "cfi-a", color = "#FFC107", style = "highlight" },
+                    { id = 13, cfi = "cfi-b", color = "#FFC107", style = "highlight" },
+                },
+            })
+
+            local unchecked_cfis = synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.getAnnotations).was_called(2)
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 1, grimmory_id = 12 }, { index = 2, grimmory_id = 13 } }
+            )
+            assert.are.same({}, unchecked_cfis)
+        end)
+
+        it("returns the CFIs of failed creates when Grimmory cannot be read again", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ local_index = 1 }), annotation({ local_index = 2, cfi = "cfi-b" }) },
+                create_result = false,
+                refresh_ok = false,
+            })
+
+            assert.are.same(
+                { ["cfi-a"] = true, ["cfi-b"] = true },
+                synchronizer:pushBookAnnotations("/books/a.epub", 5)
+            )
+        end)
+
+        it("links a moved annotation whose create seemed to fail and deletes its old copy", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ id = 7, cfi = "cfi-b" }) },
+                remote_annotations = { { id = 7, cfi = "cfi-a" } },
+                modified_ids = { 7 },
+                create_result = false,
+                refreshed_remote_annotations = {
+                    { id = 7, cfi = "cfi-a" },
+                    { id = 42, cfi = "cfi-b", color = "#FFC107", style = "highlight" },
+                },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 1, grimmory_id = 42 } }
+            )
+            assert.spy(synchronizer.api.deleteAnnotation).was_called_with(synchronizer.api, 7)
+        end)
+
+        it("decides removals by the list read again after failed creates", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation() },
+                remote_annotations = { { id = 9, cfi = "cfi-z" } },
+                modified_ids = { 9 },
+                create_result = false,
+                refreshed_remote_annotations = {},
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.deleteAnnotation).was_not_called()
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation)
+                .was_called_with(synchronizer.doc_metadata, "/books/a.epub", 9)
+        end)
+
+        it("saves new IDs before deleting old copies", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ id = 7, cfi = "cfi-b" }) },
+                remote_annotations = { { id = 7, cfi = "cfi-a" } },
+                modified_ids = { 7 },
+                create_result = 42,
+            })
+            local calls = {}
+            synchronizer.reading_annotations.setGrimmoryIds = function()
+                table.insert(calls, "setGrimmoryIds")
+            end
+            synchronizer.api.deleteAnnotation = function()
+                table.insert(calls, "deleteAnnotation")
+                return true
+            end
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.are.same({ "setGrimmoryIds", "deleteAnnotation" }, calls)
+        end)
+
+        it("does not link a new annotation to a Grimmory one another annotation holds", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = {
+                    annotation({ id = 9, local_index = 1 }),
+                    annotation({ local_index = 2 }),
+                },
+                remote_annotations = { { id = 9, cfi = "cfi-a" } },
+                create_result = 43,
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.createAnnotation).was_called(1)
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 2, grimmory_id = 43 } }
+            )
+        end)
+
+        it("treats a create that returns no ID as failed", function()
+            local synchronizer = new_synchronizer({ local_annotations = { annotation() } })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_not_called()
+        end)
+
+        it("saves the IDs created before a failure", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { annotation({ local_index = 1 }), annotation({ local_index = 2, cfi = "cfi-b" }) },
+                create_result = 44,
+            })
+            local creates = 0
+            synchronizer.api.createAnnotation = function()
+                creates = creates + 1
+                if creates == 2 then
+                    error("connection reset", 0)
+                end
+                return true, 44
+            end
 
             assert.has_error(function()
                 synchronizer:pushBookAnnotations("/books/a.epub", 5)
-            end, "Could not read annotations")
+            end, "connection reset")
+
+            assert.spy(synchronizer.reading_annotations.setGrimmoryIds).was_called_with(
+                synchronizer.reading_annotations,
+                "/books/a.epub",
+                { { index = 1, grimmory_id = 44 } }
+            )
+        end)
+
+        it("fails before changing anything when Grimmory cannot be read", function()
+            local synchronizer = new_synchronizer({ local_annotations = { annotation() }, remote_ok = false })
+
+            assert.has_error(function()
+                synchronizer:pushBookAnnotations("/books/a.epub", 5)
+            end, "Could not read annotations from Grimmory")
+
+            assert.spy(synchronizer.api.createAnnotation).was_not_called()
+        end)
+
+        it("fails before touching Grimmory when the annotations cannot be read", function()
+            local synchronizer = new_synchronizer({ modified_ids = { 9 } })
+
+            assert.has_error(function()
+                synchronizer:pushBookAnnotations("/books/a.epub", 5)
+            end)
 
             assert.spy(synchronizer.api.deleteAnnotation).was_not_called()
-            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation).was_not_called()
         end)
     end)
 
@@ -767,6 +1168,20 @@ describe("GrimmorySynchronize", function()
             assert.has_error(function()
                 synchronizer:pullBookAnnotations("/books/a.epub", 5)
             end)
+        end)
+
+        it("hands the CFIs to hold back to the book", function()
+            local apply_annotations = spy.new(function() return true end)
+            local synchronizer = GrimmorySynchronize:new({
+                api = { getAnnotations = function() return true, {} end },
+                reading_annotations = { applyAnnotations = apply_annotations },
+            })
+            local held_back_cfis = { ["cfi-a"] = true }
+
+            synchronizer:pullBookAnnotations("/books/a.epub", 5, held_back_cfis)
+
+            assert.spy(apply_annotations)
+                .was_called_with(synchronizer.reading_annotations, "/books/a.epub", {}, held_back_cfis)
         end)
 
         it("fails when the annotations cannot be written to the book", function()
@@ -815,6 +1230,17 @@ describe("GrimmorySynchronize", function()
                 "pushBookMetadata",
                 "pullBookProgress",
             }, call_order)
+        end)
+
+        it("keeps the pull from importing what the push could not check", function()
+            local synchronizer = new_synchronizer(true)
+            local unchecked_cfis = { ["cfi-a"] = true }
+            synchronizer.pushBookAnnotations = function() return unchecked_cfis end
+
+            synchronizer:synchronizeBook("/books/a.epub", false, function() end)
+
+            assert.stub(synchronizer.pullBookAnnotations)
+                .was_called_with(synchronizer, "/books/a.epub", 5, unchecked_cfis)
         end)
 
         it("leaves annotations alone when annotation sync is disabled", function()

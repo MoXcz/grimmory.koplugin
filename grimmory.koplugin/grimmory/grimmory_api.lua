@@ -72,6 +72,7 @@ end
 
 ---@class GrimmoryAnnotation
 ---@field id number | nil
+---@field local_index integer | nil position in the book's sidecar annotations, set on local annotations
 ---@field book_id number
 ---@field created_at number
 ---@field updated_at number | nil
@@ -831,6 +832,8 @@ end
 ---@param color string
 ---@param style string
 ---@param note string | nil
+---@return boolean ok
+---@return number | string | nil id_or_error the new annotation's ID, or the error when not ok
 function GrimmoryAPI:createAnnotation(
     book_id,
     cfi,
@@ -858,10 +861,10 @@ function GrimmoryAPI:createAnnotation(
 
     if not ok then
         logger:err("Unable to push annotation", body)
-        return false, nil
+        return false, body
     end
 
-    return ok, body
+    return true, type(body) == "table" and from_json_number(body.id) or nil
 end
 
 ---@param annotation_id number
@@ -895,7 +898,8 @@ function GrimmoryAPI:updateAnnotation(
     local request = {
         color = color,
         style = style,
-        note = note,
+        -- Grimmory skips a missing note, so a cleared one has to be sent as empty.
+        note = note or "",
     }
 
     local ok, _, body = self:request(
