@@ -668,18 +668,29 @@ function GrimmoryAPI:recordSession(
     return ok, body
 end
 
-function GrimmoryAPI:getKoreaderSync()
+---@class GrimmoryKoreaderUser
+---@field sync_enabled boolean
+---@field username string | nil
+---@field password string | nil
+
+---@return boolean ok
+---@return GrimmoryKoreaderUser | nil user
+function GrimmoryAPI:getKoreaderUser()
     local ok, _, body = self:request(
         "GET",
         "/api/v1/koreader-users/me"
     )
 
-    if not ok or not body then
-        logger:err("Could not get koreader sync status", body)
+    if not ok or type(body) ~= "table" then
+        logger:err("Could not get koreader user", body)
         return false, nil
     end
 
-    return true, from_json_bool(body["syncEnabled"])
+    return true, {
+        sync_enabled = from_json_bool(body["syncEnabled"]),
+        username = from_json_string(body["username"]),
+        password = from_json_string(body["password"]),
+    }
 end
 
 ---@param enabled boolean
@@ -695,23 +706,6 @@ function GrimmoryAPI:setKoreaderSync(enabled)
     end
 
     return true, nil
-end
-
----@return boolean ok
----@return string | nil auth_id
----@return string | nil auth_secret
-function GrimmoryAPI:getKoreaderCredentials()
-    local ok, _, body = self:request(
-        "GET",
-        "/api/v1/koreader-users/me"
-    )
-
-    if not ok or not body then
-        logger:err("Could not get koreader credentials", body)
-        return false, nil, nil
-    end
-
-    return true, from_json_string(body["username"]), from_json_string(body["password"])
 end
 
 function GrimmoryAPI:setKoreaderCredentials(auth_key, auth_secret)

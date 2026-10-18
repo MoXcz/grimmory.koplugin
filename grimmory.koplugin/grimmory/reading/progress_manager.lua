@@ -171,14 +171,14 @@ function ReadingProgressManager:getCredentials()
         return self.koreader_auth_id, self.koreader_auth_secret_md5
     end
 
-    local sync_ok, sync_enabled = self.api:getKoreaderSync()
+    local user_ok, user = self.api:getKoreaderUser()
 
-    if not sync_ok then
-        logger:err("Could not read sync status")
+    if not user_ok or user == nil then
+        logger:err("Could not read the koreader sync user")
         return nil, nil
     end
 
-    if not sync_enabled then
+    if not user.sync_enabled then
         -- If sync isn't enabled, let's try to enable it.
         local ok = self.api:setKoreaderSync(true)
 
@@ -188,11 +188,11 @@ function ReadingProgressManager:getCredentials()
         end
     end
 
-    -- Get recent progress records
-    local credentials_ok, koreader_auth_id, koreader_auth_secret = self.api:getKoreaderCredentials()
+    local koreader_auth_id = user.username
+    local koreader_auth_secret = user.password
 
-    if not credentials_ok then
-        logger:err("Failed to get koreader sync credentials")
+    if koreader_auth_id == nil or koreader_auth_secret == nil then
+        logger:err("Grimmory has no koreader sync credentials")
         return nil, nil
     end
 

@@ -1,4 +1,5 @@
 local assert = require 'luassert'
+local spy = require 'luassert.spy'
 
 package.path = "grimmory.koplugin/?.lua;" .. package.path
 
@@ -163,6 +164,42 @@ describe("ReadingProgressManager", function()
             local manager = new_manager({ end_time = 100, end_progress = 30 }, 30, nil)
 
             assert.are.equal("none", (manager:getPullDecision("/books/a.epub")))
+        end)
+    end)
+
+    describe("getCredentials", function()
+        local function new_manager_with_user(user)
+            return ReadingProgressManager:new({
+                api = {
+                    getKoreaderUser = spy.new(function() return user ~= nil, user end),
+                    setKoreaderSync = spy.new(function() return true end),
+                },
+            })
+        end
+
+        it("reads the KOReader credentials with a single request", function()
+            local manager = new_manager_with_user({ sync_enabled = true, username = "reader", password = "secret" })
+
+            local auth_id, auth_secret = manager:getCredentials()
+
+            assert.are.equal("reader", auth_id)
+            assert.are.equal("md5", auth_secret)
+            assert.spy(manager.api.getKoreaderUser).was_called(1)
+            assert.spy(manager.api.setKoreaderSync).was_not_called()
+        end)
+
+        it("turns KOReader sync on when Grimmory has it off", function()
+            local manager = new_manager_with_user({ sync_enabled = false, username = "reader", password = "secret" })
+
+            manager:getCredentials()
+
+            assert.spy(manager.api.setKoreaderSync).was_called_with(manager.api, true)
+        end)
+
+        it("gives up when Grimmory has no KOReader credentials", function()
+            local manager = new_manager_with_user({ sync_enabled = true })
+
+            assert.is_nil(manager:getCredentials())
         end)
     end)
 
