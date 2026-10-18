@@ -83,29 +83,82 @@ local function parseVersion(version)
     return tonumber(major) or 0, tonumber(minor) or 0, tonumber(patch) or 0, prerelease, build
 end
 
+---@param identifier string
+---@return number | nil
+local function numericIdentifier(identifier)
+    return identifier:match("^%d+$") and tonumber(identifier)
+end
+
+---Compares dot-separated prerelease labels the way SemVer ranks them.
+---@param prerelease_a string
+---@param prerelease_b string
+---@return boolean later true when `prerelease_b` ranks above `prerelease_a`
+local function isPrereleaseLater(prerelease_a, prerelease_b)
+    local identifiers_a, identifiers_b = {}, {}
+
+    for identifier in prerelease_a:gmatch("[^.]+") do
+        table.insert(identifiers_a, identifier)
+    end
+
+    for identifier in prerelease_b:gmatch("[^.]+") do
+        table.insert(identifiers_b, identifier)
+    end
+
+    for index = 1, math.max(#identifiers_a, #identifiers_b) do
+        local identifier_a, identifier_b = identifiers_a[index], identifiers_b[index]
+
+        -- A label that is a prefix of the other ranks lower.
+        if identifier_a == nil or identifier_b == nil then
+            return identifier_a == nil
+        end
+
+        if identifier_a ~= identifier_b then
+            local number_a, number_b = numericIdentifier(identifier_a), numericIdentifier(identifier_b)
+
+            if number_a and number_b then
+                return number_b > number_a
+            end
+
+            -- Numeric identifiers rank below alphanumeric ones.
+            if number_a or number_b then
+                return number_a ~= nil
+            end
+
+            return identifier_b > identifier_a
+        end
+    end
+
+    return false
+end
+
 ---@param version_a string
 ---@param version_b string
 local function isVersionLater(version_a, version_b)
     local major_a, minor_a, patch_a, prerelease_a = parseVersion(version_a)
     local major_b, minor_b, patch_b, prerelease_b = parseVersion(version_b)
 
-    if major_b > major_a then
-        return true
+    if major_b ~= major_a then
+        return major_b > major_a
     end
 
-    if minor_b > minor_a then
-        return true
+    if minor_b ~= minor_a then
+        return minor_b > minor_a
     end
 
-    if patch_b > patch_a then
-        return true
+    if patch_b ~= patch_a then
+        return patch_b > patch_a
     end
 
-    if prerelease_b ~= prerelease_a then
-        return true
+    if prerelease_b == prerelease_a then
+        return false
     end
 
-    return false
+    -- A release outranks its own prereleases.
+    if prerelease_a == nil or prerelease_b == nil then
+        return prerelease_b == nil
+    end
+
+    return isPrereleaseLater(prerelease_a, prerelease_b)
 end
 
 ---@class GrimmorySelfUpdater
