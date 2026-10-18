@@ -86,12 +86,14 @@ end
 
 ---Remote progress replaces local only when it is newer and further ahead.
 ---A newer local event wins even over a remote that is ahead, so a reread on this device is not undone.
+---@param book_path string
+---@param book_md5? string known partial MD5, saving a re-read of the file
 ---@return ProgressPullDecision decision
 ---@return number | nil local_percent
 ---@return ReadingSessionProgress | nil remote_progress
-function ReadingProgressManager:getPullDecision(book_path)
-    local recorded_progress = self:getLocalProgressForBook(book_path)
-    local _, _, remote_progress = self:getRemoteProgressForBook(book_path)
+function ReadingProgressManager:getPullDecision(book_path, book_md5)
+    local recorded_progress = self:getLocalProgressForBook(book_path, book_md5)
+    local _, _, remote_progress = self:getRemoteProgressForBook(book_path, book_md5)
 
     -- The sidecar holds the real position, also for books read before the plugin recorded events.
     local local_percent = self.doc_metadata:getProgressPercent(book_path)
@@ -141,9 +143,11 @@ function ReadingProgressManager:getPushDecision(local_progress)
     return "push", remote_progress.end_progress
 end
 
+---@param book_path string
+---@param book_md5? string known partial MD5, saving a re-read of the file
 ---@return ReadingSessionProgress | nil progress
-function ReadingProgressManager:getLocalProgressForBook(book_path)
-    local ok, book_id = self.repository:upsertBook(book_path)
+function ReadingProgressManager:getLocalProgressForBook(book_path, book_md5)
+    local ok, book_id = self.repository:upsertBook(book_path, nil, book_md5)
 
     if not ok or book_id == nil then
         return nil

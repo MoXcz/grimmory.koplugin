@@ -525,12 +525,16 @@ end
 
 ---@param book_path string
 ---@param callback function
-function GrimmorySynchronize:pullBookProgress(book_path, callback)
+---@param book_md5? string known partial MD5, saving a re-read of the file
+function GrimmorySynchronize:pullBookProgress(book_path, callback, book_md5)
     if not self.settings:getSyncReadingProgress() then
         return
     end
 
-    local decision, local_percent, remote_progress = self.reading_progress_manager:getPullDecision(book_path)
+    local decision, local_percent, remote_progress = self.reading_progress_manager:getPullDecision(
+        book_path,
+        book_md5
+    )
 
     if decision == "apply" and self.reading_progress_manager:isOpenBook(book_path) then
         -- A jump made in this subprocess never reaches the reader; the prompt on reopen offers it instead.
@@ -579,15 +583,17 @@ end
 
 ---@param book Book
 ---@return string download_path
+---@return string | nil partial_md5 set when the path is an already downloaded copy of the book
 function GrimmorySynchronize:getBookDownloadPath(book)
     local existing_book_ok, existing_books = self.repository:findBooksByGrimmoryId(book.id)
     if existing_book_ok then
         for _, local_book in ipairs(existing_books) do
-            if (
-                util.fileExists(local_book.book_path) and
-                util.partialMD5(local_book.book_path) == local_book.book_md5
-            ) then
-                return local_book.book_path
+            if util.fileExists(local_book.book_path) then
+                local partial_md5 = util.partialMD5(local_book.book_path)
+
+                if partial_md5 == local_book.book_md5 then
+                    return local_book.book_path, partial_md5
+                end
             end
         end
     end
@@ -790,7 +796,7 @@ function GrimmorySynchronize:pullBook(book, callback)
     local book_exists = false
     local is_downloaded = false
 
-    local download_path = self:getBookDownloadPath(book)
+    local download_path, partial_md5 = self:getBookDownloadPath(book)
 
     -- TODO: Search through known books from collections for this book
     --       If found, set the `download path to that value.
@@ -818,12 +824,15 @@ function GrimmorySynchronize:pullBook(book, callback)
     end
 
     if book_exists and download_path then
-        self.repository:upsertBook(download_path, book.id)
+        -- Read once here; the repository and the progress lookups would each read the file again.
+        partial_md5 = partial_md5 or util.partialMD5(download_path)
+
+        self.repository:upsertBook(download_path, book.id, partial_md5)
 
         -- After we're done, if the book exists we should attach it
         -- to associated shelves and pull the book progress.
         self:associateWithShelves(download_path, book.shelves or {})
-        self:pullBookProgress(download_path, callback)
+        self:pullBookProgress(download_path, callback, partial_md5)
     end
 
     return download_path, is_downloaded

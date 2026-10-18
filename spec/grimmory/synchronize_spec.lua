@@ -1,4 +1,5 @@
 local assert = require 'luassert'
+local match = require 'luassert.match'
 local spy = require 'luassert.spy'
 local stub = require 'luassert.stub'
 
@@ -372,6 +373,57 @@ describe("GrimmorySynchronize", function()
         end)
     end)
 
+    describe("pullBook", function()
+        local util = require("util")
+
+        local function new_synchronizer()
+            local synchronizer = GrimmorySynchronize:new({
+                settings = new_settings(),
+                repository = { upsertBook = spy.new(function() return true, 1, 5 end) },
+            })
+
+            stub(synchronizer, "getBookDownloadPath", function() return "/books/a.epub", "md5-a" end)
+            stub(synchronizer, "associateWithShelves")
+            stub(synchronizer, "pullBookProgress")
+
+            return synchronizer
+        end
+
+        before_each(function()
+            util.fileExists = function() return true end
+            util.partialMD5 = spy.new(function() return "md5-read" end)
+        end)
+
+        after_each(function()
+            util.fileExists = nil
+            util.partialMD5 = nil
+        end)
+
+        it("reuses the checksum of a copy that is already downloaded", function()
+            local synchronizer = new_synchronizer()
+
+            synchronizer:pullBook({ id = 5 }, function() end)
+
+            assert.spy(util.partialMD5).was_not_called()
+            assert.spy(synchronizer.repository.upsertBook)
+                .was_called_with(synchronizer.repository, "/books/a.epub", 5, "md5-a")
+            assert.stub(synchronizer.pullBookProgress)
+                .was_called_with(synchronizer, "/books/a.epub", match._, "md5-a")
+        end)
+
+        it("computes the checksum once for a book it had to look for", function()
+            local synchronizer = new_synchronizer()
+            synchronizer.getBookDownloadPath = function() return "/books/a.epub", nil end
+
+            synchronizer:pullBook({ id = 5 }, function() end)
+
+            assert.spy(util.partialMD5).was_called(1)
+            assert.spy(synchronizer.repository.upsertBook)
+                .was_called_with(synchronizer.repository, "/books/a.epub", 5, "md5-read")
+        end)
+
+    end)
+
     describe("pullBookProgress", function()
         local remote_progress = { book_path = "/books/a.epub", end_progress = 60 }
 
@@ -385,6 +437,16 @@ describe("GrimmorySynchronize", function()
                 },
             })
         end
+
+        it("passes a known checksum on to the progress lookup", function()
+            local synchronizer = new_synchronizer("none", 60)
+            synchronizer.reading_progress_manager.getPullDecision = spy.new(function() return "none" end)
+
+            synchronizer:pullBookProgress("/books/a.epub", function() end, "md5-a")
+
+            assert.spy(synchronizer.reading_progress_manager.getPullDecision)
+                .was_called_with(synchronizer.reading_progress_manager, "/books/a.epub", "md5-a")
+        end)
 
         it("applies newer remote progress and reports the change", function()
             local synchronizer = new_synchronizer("apply", 30)

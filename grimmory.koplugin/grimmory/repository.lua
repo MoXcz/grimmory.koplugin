@@ -146,14 +146,15 @@ end
 
 ---@param book_path string
 ---@param grimmory_id number | nil
+---@param known_partial_md5? string the file's partial MD5 when the caller already has it
 ---@return boolean ok
 ---@return integer | nil book_id
 ---@return integer | nil grimmory_id
-function GrimmoryLocalRepository:upsertBook(book_path, grimmory_id)
+function GrimmoryLocalRepository:upsertBook(book_path, grimmory_id, known_partial_md5)
     -- Resolve path for file.
     local absolute_book_path = ffiUtil.realpath(book_path)
 
-    local partial_md5 = util.partialMD5(absolute_book_path)
+    local partial_md5 = known_partial_md5 or util.partialMD5(absolute_book_path)
 
     local ok, book = with_database(
         self.database_path,

@@ -167,6 +167,36 @@ describe("ReadingProgressManager", function()
         end)
     end)
 
+    describe("getPullDecision checksum", function()
+        it("hands a known checksum to the local and remote lookups", function()
+            local manager = ReadingProgressManager:new({
+                doc_metadata = { getProgressPercent = function() return nil end },
+            })
+            manager.getLocalProgressForBook = spy.new(function() return nil end)
+            manager.getRemoteProgressForBook = spy.new(function() return nil, nil, nil end)
+
+            manager:getPullDecision("/books/a.epub", "md5-a")
+
+            assert.spy(manager.getLocalProgressForBook).was_called_with(manager, "/books/a.epub", "md5-a")
+            assert.spy(manager.getRemoteProgressForBook).was_called_with(manager, "/books/a.epub", "md5-a")
+        end)
+
+        it("passes the checksum on to the repository", function()
+            local manager = ReadingProgressManager:new({
+                ui = {},
+                repository = {
+                    upsertBook = spy.new(function() return true, 1 end),
+                    getReadingProgress = function() return true, nil end,
+                },
+            })
+
+            manager:getLocalProgressForBook("/books/a.epub", "md5-a")
+
+            assert.spy(manager.repository.upsertBook)
+                .was_called_with(manager.repository, "/books/a.epub", nil, "md5-a")
+        end)
+    end)
+
     describe("getCredentials", function()
         local function new_manager_with_user(user)
             return ReadingProgressManager:new({

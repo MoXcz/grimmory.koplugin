@@ -1,4 +1,5 @@
 local assert = require 'luassert'
+local spy = require 'luassert.spy'
 local stub = require 'luassert.stub'
 
 package.path = "grimmory.koplugin/?.lua;" .. package.path
@@ -92,6 +93,58 @@ describe("GrimmoryLocalRepository", function()
             assert.are.equal(2, #sessions)
             assert.is_true(sessions[1].is_finished)
             assert.is_false(sessions[2].is_finished)
+        end)
+    end)
+
+    describe("upsertBook", function()
+        local SQ3 = require("lua-ljsqlite3/init")
+        local ffiUtil = require("ffi/util")
+        local util = require("util")
+
+        local bound_checksums
+
+        before_each(function()
+            bound_checksums = {}
+            ffiUtil.realpath = function(path) return path end
+            util.partialMD5 = spy.new(function() return "md5-read" end)
+
+            -- Every statement upsertBook prepares binds the path and the checksum, and finds book 1 on Grimmory 5.
+            SQ3.open = function()
+                return {
+                    set_busy_timeout = function() end,
+                    close = function() end,
+                    prepare = function()
+                        return {
+                            bind = function(_, _, checksum) table.insert(bound_checksums, checksum) end,
+                            step = function() return { 1, 5 } end,
+                            close = function() end,
+                        }
+                    end,
+                }
+            end
+        end)
+
+        after_each(function()
+            ffiUtil.realpath = nil
+            util.partialMD5 = nil
+            SQ3.open = nil
+        end)
+
+        it("uses the checksum the caller already has", function()
+            local ok, book_id, grimmory_id = GrimmoryLocalRepository:new():upsertBook("/books/a.epub", 5, "md5-known")
+
+            assert.is_true(ok)
+            assert.are.equal(1, book_id)
+            assert.are.equal(5, grimmory_id)
+            assert.spy(util.partialMD5).was_not_called()
+            assert.are.same({ "md5-known", "md5-known" }, bound_checksums)
+        end)
+
+        it("reads the checksum when the caller has none", function()
+            GrimmoryLocalRepository:new():upsertBook("/books/a.epub", 5)
+
+            assert.spy(util.partialMD5).was_called_with("/books/a.epub")
+            assert.are.same({ "md5-read", "md5-read" }, bound_checksums)
         end)
     end)
 end)
