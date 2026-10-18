@@ -23,7 +23,8 @@ local function get_plugin_path()
     local all_plugins = PluginLoader._discover()
 
     for _, plugin in ipairs(all_plugins) do
-        if plugin.name == "grimmory.koplugin" then
+        -- PluginLoader names plugins after their directory without the ".koplugin" suffix.
+        if plugin.name == "grimmory" then
             return plugin.path
         end
     end
