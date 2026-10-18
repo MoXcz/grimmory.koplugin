@@ -41,18 +41,6 @@ function ReadingRecorder:getOpenBookTotalPages()
     return self.ui.document:getPageCount()
 end
 
-function ReadingRecorder:getOpenBookReadPercent()
-    if not self.ui or not self.ui.document then
-        return 0
-    end
-
-    if self.ui.document.info.has_pages then
-        return self.ui.paging:getLastPercent()
-    else
-        return self.ui.rolling:getLastPercent()
-    end
-end
-
 ---@return string | nil xpointer
 function ReadingRecorder:getOpenBookXPointer()
     if not self.ui or not self.ui.document or self.ui.document.info.has_pages then

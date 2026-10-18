@@ -59,14 +59,12 @@ end
 ---@field isbn13 string | nil
 ---@field isbn10 string | nil
 ---@field asin string | nil
----@field title string | nil
 
 ---@class BookFile
 ---@field filename string
 
 ---@class Book
 ---@field id number
----@field added_on number
 ---@field shelves number[]
 ---@field metadata BookMetadata
 ---@field primary_file BookFile | nil
@@ -100,7 +98,6 @@ local function parse_book(book)
         isbn10 = from_json_string(book_metadata["isbn10"]),
         isbn13 = from_json_string(book_metadata["isbn13"]),
         asin = from_json_string(book_metadata["asin"]),
-        title = from_json_string(book_metadata["title"]),
     }
 
     local primary_file = nil
@@ -115,7 +112,6 @@ local function parse_book(book)
 
     return {
         id = from_json_number(book.id),
-        added_on = from_json_iso8601(book["addedOn"]),
         shelves = shelves,
         metadata = metadata,
         primary_file = primary_file,
@@ -712,25 +708,6 @@ function GrimmoryAPI:setKoreaderSync(enabled)
     end
 
     return true, nil
-end
-
-function GrimmoryAPI:setKoreaderCredentials(auth_key, auth_secret)
-    local request = {
-        username = auth_key,
-        password = auth_secret,
-    }
-
-    local ok, _, body = self:request(
-        "PUT",
-        "/api/v1/koreader-users/me",
-        request
-    )
-
-    if not ok or not body then
-        return false
-    end
-
-    return true
 end
 
 function GrimmoryAPI:pushReadingProgress(

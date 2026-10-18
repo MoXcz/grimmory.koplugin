@@ -17,7 +17,6 @@ local logger = GrimmoryLogger:new()
 ---@field name string
 
 ---@class GrimmorySettingsData
----@field automatic_check_updates boolean
 ---@field base_uri string
 ---@field username string
 ---@field password string
@@ -44,7 +43,6 @@ local logger = GrimmoryLogger:new()
 
 ---@type GrimmorySettingsData
 local DEFAULTS = {
-    automatic_check_updates = false,
     extra_headers = {},
     base_uri = "",
     username = "",

@@ -157,14 +157,6 @@ function DocMetadata:getASIN(path)
     )
 end
 
-function DocMetadata:getTitle(path)
-    return self:getDocProps(path).title
-end
-
-function DocMetadata:getAuthor(path)
-    return self:getDocProps(path).authors
-end
-
 ---@param path string
 ---@param book Book
 function DocMetadata:isBook(path, book)
@@ -184,19 +176,6 @@ function DocMetadata:isBook(path, book)
     end
 
     return false
-end
-
----@param path string
-function DocMetadata:clearProgress(path)
-    local settings = self:getDocSettings(path)
-
-    apply_dom_version(settings)
-
-    settings:delSetting("percent_finished")
-    settings:delSetting("last_xpointer")
-    settings:delSetting("last_page")
-
-    settings:flush()
 end
 
 ---@param path string

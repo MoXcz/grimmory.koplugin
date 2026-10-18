@@ -131,19 +131,6 @@ function GithubAPI:getRelease(repository, version)
 end
 
 ---@param repository string
----@return boolean ok
----@return string | nil body
-function GithubAPI:getReleaseDescription(repository, version)
-    local ok, release = self:getRelease(repository, version)
-
-    if not ok or not release then
-        return false, nil
-    end
-
-    return release.body
-end
-
----@param repository string
 ---@param version string
 ---@param name_filter string | nil
 ---@return boolean ok Success of the request

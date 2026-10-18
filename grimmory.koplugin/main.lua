@@ -50,8 +50,6 @@ local update_periodic_sync = nil
 local Grimmory = WidgetContainer:extend{
     name = "grimmory",
     is_doc_only = false,
-    release_check_cancel = nil,
-    menu = nil,
 }
 
 function Grimmory:onDispatcherRegisterActions()
