@@ -16,7 +16,7 @@ local logger = GrimmoryLogger:new()
 ---@field settings GrimmorySettings
 ---@field dialog_manager DialogManager
 ---@field updater GrimmorySelfUpdater
----@field interrupt_sync function
+---@field get_sync_interrupt fun(): function | nil interrupts the running sync, nil when none runs
 local GrimmoryMenu = {}
 
 function GrimmoryMenu:new(o)
@@ -24,14 +24,6 @@ function GrimmoryMenu:new(o)
     setmetatable(o, self)
     self.__index = self
     return o
-end
-
-function GrimmoryMenu:onGrimmorySyncStart(interrupt_sync_callback)
-    self.interrupt_sync = interrupt_sync_callback
-end
-
-function GrimmoryMenu:onGrimmorySyncComplete()
-    self.interrupt_sync = nil
 end
 
 function GrimmoryMenu:getAboutMenu()
@@ -315,7 +307,7 @@ function GrimmoryMenu:getTopMenu()
         },
     }
 
-    if self.interrupt_sync == nil then
+    if self.get_sync_interrupt() == nil then
         table.insert(
             menu, 1,
             {
@@ -335,11 +327,15 @@ function GrimmoryMenu:getTopMenu()
             {
                 text = _("Interrupt Current Sync"),
                 callback = function()
-                    if self.interrupt_sync ~= nil then
+                    if self.get_sync_interrupt() ~= nil then
                         local dialog = ConfirmBox:new({
                             text = _("Are you sure you want to interrupt synchronization?"),
                             ok_callback = function()
-                                pcall(self.interrupt_sync)
+                                local interrupt_sync = self.get_sync_interrupt()
+
+                                if interrupt_sync ~= nil then
+                                    pcall(interrupt_sync)
+                                end
                             end,
                         })
                         UIManager:show(dialog)
@@ -356,7 +352,7 @@ function GrimmoryMenu:getTopMenu()
             {
                 text = _("Sync Open Book Now"),
                 enabled_func = function()
-                    return self.settings:getBaseUri() ~= "" and self.interrupt_sync == nil
+                    return self.settings:getBaseUri() ~= "" and self.get_sync_interrupt() == nil
                 end,
                 callback = function()
                     UIManager:broadcastEvent(Event:new("GrimmorySyncOpenBook", true))

@@ -6,15 +6,16 @@ local GrimmoryLogger = require("grimmory/logger")
 local logger = GrimmoryLogger:new()
 
 ---@class GrimmoryScheduler
-local GrimmoryScheduler = {
-    intervals = {},
-    cancellables = {},
-}
+---@field private intervals table
+---@field private cancellables table
+local GrimmoryScheduler = {}
 
 function GrimmoryScheduler:new(o)
     o = o or {}
     setmetatable(o, self)
     self.__index = self
+    o.intervals = {}
+    o.cancellables = {}
     return o
 end
 

@@ -32,19 +32,26 @@ local GrimmoryReadingProgressManager = require("grimmory/reading/progress_manage
 
 local logger = GrimmoryLogger:new()
 
+-- KOReader creates a plugin instance per file manager and reader screen; this is the one on screen.
+local live_instance = nil
+
+-- Set while a sync runs; shared by every instance, since a sync outlives the screen that started it.
+local interrupt_running_sync = nil
+
+-- One timer for the whole process: a timer per screen restarted its countdown on every screen switch.
+local periodic_sync_scheduler = GrimmoryScheduler:new()
+local cancel_periodic_sync = nil
+local update_periodic_sync = nil
+
 ---@class Grimmory
 ---@field dialog_manager DialogManager
----@field scheduler GrimmoryScheduler
 ---@field synchronizer GrimmorySynchronize
 ---@field ui any This is a ReaderUI
 local Grimmory = WidgetContainer:extend{
     name = "grimmory",
     is_doc_only = false,
-    periodic_sync_cancel = nil,
-    periodic_sync_update = nil,
     release_check_cancel = nil,
     menu = nil,
-    is_synchronizing = false,
 }
 
 function Grimmory:onDispatcherRegisterActions()
@@ -78,7 +85,6 @@ function Grimmory:onDispatcherRegisterActions()
 end
 
 function Grimmory:init()
-    self.scheduler = GrimmoryScheduler:new()
     self.settings = GrimmorySettings:new()
 
     self.repository = GrimmoryLocalRepository:new({
@@ -98,7 +104,6 @@ function Grimmory:init()
     self.updater = GrimmorySelfUpdater:new({
         github_api = GithubAPI:new(),
         settings = self.settings,
-        scheduler = self.scheduler,
     })
 
     self.api = GrimmoryAPI:new({
@@ -131,6 +136,7 @@ function Grimmory:init()
         settings = self.settings,
         dialog_manager = self.dialog_manager,
         updater = self.updater,
+        get_sync_interrupt = function() return interrupt_running_sync end,
     })
 
     self.synchronizer = GrimmorySynchronize:new({
@@ -146,6 +152,9 @@ function Grimmory:init()
 
     self.ui.menu:registerToMainMenu(self.menu)
 
+    live_instance = self
+
+    -- KOReader keeps only the first registration for a row ID, so the buttons must not capture `self`.
     FileManager:addFileDialogButtons(
         "grimmory_actions",
         function(file, is_file)
@@ -153,30 +162,29 @@ function Grimmory:init()
                 return nil
             end
 
+            local function sync_file(refresh_book)
+                local file_chooser = FileManager.instance.file_chooser
+
+                if file_chooser and file_chooser.file_dialog then
+                    UIManager:close(file_chooser.file_dialog)
+                end
+
+                if live_instance then
+                    live_instance:onGrimmorySync(true, file, refresh_book)
+                end
+            end
+
             return {
                 {
                     text = _("Sync with Grimmory"),
                     callback = function()
-                        local file_chooser = FileManager.instance.file_chooser
-
-                        if file_chooser and file_chooser.file_dialog then
-                            UIManager:close(file_chooser.file_dialog)
-                        end
-
-                        self:onGrimmorySync(true, file)
+                        sync_file(false)
                     end,
                 },
                 {
                     text = _("Reload from Grimmory"),
                     callback = function()
-                        local file_chooser = FileManager.instance.file_chooser
-
-                        if file_chooser and file_chooser.file_dialog then
-                            UIManager:close(file_chooser.file_dialog)
-                        end
-
-                        -- Mark book for refresh
-                        self:onGrimmorySync(true, file, true)
+                        sync_file(true)
                     end
                 }
             }
@@ -188,10 +196,17 @@ function Grimmory:init()
     logger:dbg("Initialized")
 end
 
+function Grimmory:onCloseWidget()
+    logger:dbg("Closing")
+
+    if live_instance == self then
+        live_instance = nil
+    end
+end
+
 function Grimmory:onExit()
     logger:dbg("Exiting")
 
-    self.scheduler:clear()
     self.executor:clear()
 end
 
@@ -293,37 +308,27 @@ end
 
 function Grimmory:onSchedulePeriodicPush()
     if self.settings:getSyncPeriodically() then
-        -- If we want to sync we need to either update
-        -- and existing schedule if we already scheduled
-
         local frequency_seconds = self.settings:getSyncFrequency() * 60
 
-        if self.periodic_sync_update then
-            -- We already have an interval set up, so we should update
-            -- it with a new frequency
-            self.periodic_sync_update(frequency_seconds)
+        if update_periodic_sync then
+            update_periodic_sync(frequency_seconds)
         else
-            -- We don't have an existing sync update helper so we need
-            -- to schedule a new interval.
-            local cancel, update = self.scheduler:interval(
+            cancel_periodic_sync, update_periodic_sync = periodic_sync_scheduler:interval(
                 frequency_seconds,
                 function()
-                    self:onGrimmorySync(false)
+                    if live_instance then
+                        live_instance:onGrimmorySync(false)
+                    end
                 end
             )
-
-            self.periodic_sync_cancel = cancel
-            self.periodic_sync_update = update
         end
     else
-        -- We don't want to sync anymore so we need to cancel
-        -- if it's defined and clean up the cancel / update props
-        if self.periodic_sync_cancel then
-            self.periodic_sync_cancel()
+        if cancel_periodic_sync then
+            cancel_periodic_sync()
         end
 
-        self.periodic_sync_cancel = nil
-        self.periodic_sync_update = nil
+        cancel_periodic_sync = nil
+        update_periodic_sync = nil
     end
 end
 
@@ -369,7 +374,7 @@ function Grimmory:isReadyToSync()
         return false, _("Grimmory connection is not configured")
     end
 
-    if self.is_synchronizing then
+    if interrupt_running_sync then
         logger:info("Synchronization is already happening, not ready to sync again")
         return false, _("Grimmory synchronization is already running")
     end
@@ -457,9 +462,6 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
             terminate()
         end
 
-        self.is_synchronizing = true
-        self.menu:onGrimmorySyncStart(queue_terminate)
-
         local update_callback, close_callback
         if verbose then
             update_callback, close_callback = self.dialog_manager:showProgressDialog(
@@ -488,7 +490,11 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
         -- In the future, we should limit what we sync
         -- to current or recent books.  For now, we sync everything.
 
-        local ok, result = run(
+        interrupt_running_sync = queue_terminate
+
+        -- pcall so the shared flag is reset even when the run throws; stuck, it would refuse every later sync.
+        local run_ok, ok, result = pcall(
+            run,
             function(progress_callback)
                 if book_path then
                     self.synchronizer:synchronizeBook(book_path, refresh_book, progress_callback)
@@ -556,8 +562,11 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
             end
         )
 
-        self.is_synchronizing = false
-        self.menu:onGrimmorySyncComplete()
+        interrupt_running_sync = nil
+
+        if not run_ok then
+            ok, result = false, ok
+        end
 
         if close_callback then
             pcall(close_callback)

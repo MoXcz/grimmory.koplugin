@@ -110,7 +110,6 @@ end
 
 ---@class GrimmorySelfUpdater
 ---@field settings GrimmorySettings
----@field scheduler GrimmoryScheduler
 ---@field github_api GithubAPI
 ---@field repository string
 ---@field latest_known_version string | nil
