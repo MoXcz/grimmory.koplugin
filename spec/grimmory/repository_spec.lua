@@ -81,6 +81,12 @@ describe("GrimmoryLocalRepository", function()
             assert.is_true(sessions[1].is_finished)
         end)
 
+        it("keeps the book's path, which gives Grimmory the book type", function()
+            local sessions = pending_sessions_for({ NOW - 300, NOW - 181 })
+
+            assert.are.equal("/books/a.epub", sessions[1].book_path)
+        end)
+
         it("keeps a session open while a new event could still extend it", function()
             local sessions = pending_sessions_for({ NOW - 300, NOW - 180 })
 

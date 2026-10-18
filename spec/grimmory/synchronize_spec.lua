@@ -676,6 +676,16 @@ describe("GrimmorySynchronize", function()
                 .was_called_with(synchronizer.repository, 1, "sessions", 600)
         end)
 
+        it("sends each session's book so Grimmory can tell its type", function()
+            local synchronizer = new_synchronizer({ session() }, { true })
+
+            synchronizer:pushBookSessions(1, function() end)
+
+            assert.spy(synchronizer.api.recordSession).was_called_with(
+                synchronizer.api, 5, 0, 600, 0, 10, "1", "10", "/books/a.epub"
+            )
+        end)
+
         it("skips sessions shorter than the time threshold", function()
             local synchronizer = new_synchronizer({ session({ end_time = 30 }) }, {})
 

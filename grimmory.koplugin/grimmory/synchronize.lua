@@ -167,7 +167,8 @@ function GrimmorySynchronize:pushBookSessions(book_id, callback)
                 session.start_progress,
                 session.end_progress,
                 tostring(session.start_page),
-                tostring(session.end_page)
+                tostring(session.end_page),
+                session.book_path
             )
 
             if ok then

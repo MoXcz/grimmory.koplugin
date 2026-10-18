@@ -121,6 +121,30 @@ local function parse_book(book)
     }
 end
 
+-- Mirrors Grimmory's BookFileExtension; audiobook formats are left out because KOReader cannot open them.
+local BOOK_TYPES_BY_EXTENSION = {
+    azw = "AZW3",
+    azw3 = "AZW3",
+    cb7 = "CBX",
+    cbr = "CBX",
+    cbz = "CBX",
+    epub = "EPUB",
+    fb2 = "FB2",
+    mobi = "MOBI",
+    pdf = "PDF",
+}
+
+-- Grimmory cannot store a session without a book type, so other formats count as EPUB.
+local FALLBACK_BOOK_TYPE = "EPUB"
+
+---@param book_path string | nil
+---@return string book_type
+local function book_type_for(book_path)
+    local extension = book_path and book_path:match("%.([^./]+)$")
+
+    return extension and BOOK_TYPES_BY_EXTENSION[extension:lower()] or FALLBACK_BOOK_TYPE
+end
+
 local function getUserAgent()
     return "grimmory.koplugin/" .. PluginMetadata.getVersion() .. " (" .. PluginMetadata.getRepository() .. ")"
 end
@@ -630,6 +654,7 @@ end
 ---@param end_progress number
 ---@param start_location string
 ---@param end_location string
+---@param book_path string | nil the session's book, whose extension gives the book type
 function GrimmoryAPI:recordSession(
     book_id,
     start_time,
@@ -637,16 +662,15 @@ function GrimmoryAPI:recordSession(
     start_progress,
     end_progress,
     start_location,
-    end_location
+    end_location,
+    book_path
 )
     local duration_seconds = end_time - start_time
     local progress_delta = math.max(0, end_progress - start_progress)
 
-    local book_type = "EPUB"
-
     local request = {
         bookId = book_id,
-        bookType = book_type,
+        bookType = book_type_for(book_path),
         startTime = GrimmoryDatetime.toIso8601(start_time),
         endTime = GrimmoryDatetime.toIso8601(end_time),
         durationSeconds = duration_seconds,

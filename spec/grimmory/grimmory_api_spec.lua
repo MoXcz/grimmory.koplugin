@@ -330,4 +330,37 @@ describe("GrimmoryAPI", function()
             assert.are.equal("", sent_bodies[#sent_bodies].note)
         end)
     end)
+
+    describe("recordSession", function()
+        ---@return string book_type what the session for a book at `book_path` sends
+        local function sent_book_type(book_path)
+            new_api():recordSession(5, 0, 600, 0, 10, "1", "10", book_path)
+
+            return sent_bodies[#sent_bodies].bookType
+        end
+
+        it("names Grimmory's file type after the book's extension", function()
+            for extension, book_type in pairs({
+                azw = "AZW3",
+                azw3 = "AZW3",
+                cb7 = "CBX",
+                cbr = "CBX",
+                cbz = "CBX",
+                epub = "EPUB",
+                fb2 = "FB2",
+                mobi = "MOBI",
+                pdf = "PDF",
+            }) do
+                assert.are.equal(book_type, sent_book_type("/books/a." .. extension), extension)
+            end
+
+            assert.are.equal("CBX", sent_book_type("/books/b.CBZ"))
+        end)
+
+        it("sends EPUB for a format Grimmory has no type for", function()
+            assert.are.equal("EPUB", sent_book_type("/books/e.djvu"))
+            assert.are.equal("EPUB", sent_book_type("/books.pdf/no-extension"))
+            assert.are.equal("EPUB", sent_book_type(nil))
+        end)
+    end)
 end)
