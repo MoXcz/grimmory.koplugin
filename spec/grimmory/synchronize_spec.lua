@@ -309,6 +309,46 @@ describe("GrimmorySynchronize", function()
         end)
     end)
 
+    describe("removeBook", function()
+        local util = require("util")
+        local ReadCollection = require("readcollection")
+
+        local function new_synchronizer(is_open_book)
+            return GrimmorySynchronize:new({
+                reading_progress_manager = { isOpenBook = function() return is_open_book end },
+                doc_metadata = { purge = spy.new(function() end) },
+            })
+        end
+
+        before_each(function()
+            util.removeFile = spy.new(function() return true end)
+            ReadCollection.removeItem = spy.new(function() end)
+        end)
+
+        after_each(function()
+            util.removeFile = nil
+            ReadCollection.removeItem = nil
+        end)
+
+        it("removes a book that is not open", function()
+            local synchronizer = new_synchronizer(false)
+
+            synchronizer:removeBook("/books/a.epub")
+
+            assert.spy(util.removeFile).was_called_with("/books/a.epub")
+            assert.spy(synchronizer.doc_metadata.purge).was_called_with(synchronizer.doc_metadata, "/books/a.epub")
+        end)
+
+        it("does not remove the book that is open", function()
+            local synchronizer = new_synchronizer(true)
+
+            synchronizer:removeBook("/books/a.epub")
+
+            assert.spy(util.removeFile).was_not_called()
+            assert.spy(synchronizer.doc_metadata.purge).was_not_called()
+        end)
+    end)
+
     describe("pushBookSessions", function()
         local function session(overrides)
             local base = {

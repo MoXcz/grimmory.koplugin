@@ -24,6 +24,23 @@ package.preload["ffi/sha2"] = function()
     return { md5 = function() return "md5" end }
 end
 
+-- Maps a path to what realpath resolves it to; false stands for a missing file.
+local resolved_paths = {}
+
+package.preload["ffi/util"] = function()
+    return {
+        realpath = function(path)
+            local resolved_path = resolved_paths[path]
+
+            if resolved_path == false then
+                return nil
+            end
+
+            return resolved_path or path
+        end,
+    }
+end
+
 local ReadingProgressManager = require("grimmory/reading/progress_manager")
 
 ---@param recorded table | nil progress from the plugin's recorded events
@@ -43,6 +60,36 @@ local function new_manager(recorded, sidecar_percent, remote)
 end
 
 describe("ReadingProgressManager", function()
+    describe("isOpenBook", function()
+        local function manager_reading(file)
+            return ReadingProgressManager:new({ ui = { document = file and { file = file } } })
+        end
+
+        before_each(function()
+            resolved_paths = {}
+        end)
+
+        it("recognizes the open book through a relative download path", function()
+            resolved_paths["grimmory//a.epub"] = "/books/grimmory/a.epub"
+
+            assert.is_true(manager_reading("/books/grimmory/a.epub"):isOpenBook("grimmory//a.epub"))
+        end)
+
+        it("does not match another book", function()
+            assert.is_false(manager_reading("/books/a.epub"):isOpenBook("/books/b.epub"))
+        end)
+
+        it("does not match a file that no longer exists", function()
+            resolved_paths["/books/a.epub"] = false
+
+            assert.is_false(manager_reading("/books/a.epub"):isOpenBook("/books/a.epub"))
+        end)
+
+        it("is false when no book is open", function()
+            assert.is_false(manager_reading(nil):isOpenBook("/books/a.epub"))
+        end)
+    end)
+
     describe("getPullDecision", function()
         it("applies remote progress that is newer and further ahead", function()
             local manager = new_manager(

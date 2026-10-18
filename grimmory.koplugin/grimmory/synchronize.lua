@@ -790,6 +790,12 @@ end
 
 ---@param book_path string
 function GrimmorySynchronize:removeBook(book_path)
+    -- Deleting the book being read would pull it from under the reader; a later sync removes it.
+    if self.reading_progress_manager:isOpenBook(book_path) then
+        logger:info("Not removing the open book:", book_path)
+        return
+    end
+
     logger:info("Removing book at:", book_path)
 
     -- Remove book file

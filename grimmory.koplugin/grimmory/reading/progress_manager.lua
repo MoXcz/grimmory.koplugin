@@ -1,4 +1,5 @@
 local Event = require("ui/event")
+local ffiUtil = require("ffi/util")
 local util = require("util")
 local md5 = require("ffi/sha2").md5
 
@@ -71,7 +72,14 @@ end
 ---@param book_path string
 ---@return boolean
 function ReadingProgressManager:isOpenBook(book_path)
-    return self.ui ~= nil and self.ui.document ~= nil and self.ui.document.file == book_path
+    if self.ui == nil or self.ui.document == nil or self.ui.document.file == nil then
+        return false
+    end
+
+    -- Download paths can be relative or hold doubled slashes, so compare the resolved paths.
+    local resolved_path = ffiUtil.realpath(book_path)
+
+    return resolved_path ~= nil and resolved_path == ffiUtil.realpath(self.ui.document.file)
 end
 
 ---@alias ProgressPullDecision "apply" | "keep-local" | "none"

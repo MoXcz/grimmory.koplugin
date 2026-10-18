@@ -409,10 +409,12 @@ function Grimmory:onGrimmorySyncOpenBook(verbose)
     return self:onGrimmorySync(verbose, book_path)
 end
 
----@param after_refresh? function runs once the UI is back, after any document reload
-function Grimmory:refreshUI(after_refresh)
-    if self.ui == nil or self.ui.document == nil or self.ui.document.file == nil then
-        logger:dbg("No file is open, cannot refresh")
+---Reloads the open book when it is `book_path`; any other sync cannot have changed it, and a reload interrupts reading.
+---@param book_path string | nil the book that was synced, nil for a full sync
+---@param after_refresh? function runs once the UI is back, after the reload if there is one
+function Grimmory:refreshUI(book_path, after_refresh)
+    if book_path == nil or not self.reading_progress_manager:isOpenBook(book_path) then
+        logger:dbg("The synced book is not open, not reloading")
 
         if after_refresh then
             after_refresh()
@@ -630,9 +632,9 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
                 end
             end
 
-            self:refreshUI(show_summary)
+            self:refreshUI(book_path, show_summary)
         else
-            self:refreshUI()
+            self:refreshUI(book_path)
         end
     end
 
