@@ -39,7 +39,7 @@ local logger = GrimmoryLogger:new()
 ---@field sync_annotations boolean
 ---@field sync_shelves_as_collections boolean
 ---@field sync_retain_empty_shelves boolean
----@field device_id string
+---@field device_id? string
 ---@field device_name string
 
 ---@type GrimmorySettingsData
@@ -66,7 +66,6 @@ local DEFAULTS = {
     sync_annotations = true,
     sync_shelves_as_collections = true,
     sync_retain_empty_shelves = false,
-    device_id = random.uuid(),
     device_name = Device.model,
 }
 
@@ -105,6 +104,13 @@ function GrimmorySettings:init()
         self.data = DEFAULTS
         self:write()
     end
+
+    if self.data.device_id == nil then
+        -- Reuse KOReader's persistent device ID, which kosync reports too; read via _G since luacheck lacks the global.
+        local koreader_settings = _G.G_reader_settings
+        self.data.device_id = koreader_settings and koreader_settings:readSetting("device_id") or random.uuid()
+        self:write()
+    end
 end
 
 function GrimmorySettings:write()
@@ -130,7 +136,7 @@ function GrimmorySettings:write()
 end
 
 function GrimmorySettings:getDeviceId()
-    return self.data.device_id or DEFAULTS.device_id
+    return self.data.device_id
 end
 
 function GrimmorySettings:setDeviceId(device_id)
