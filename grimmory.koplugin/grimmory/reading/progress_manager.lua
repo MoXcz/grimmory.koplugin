@@ -321,7 +321,7 @@ function ReadingProgressManager:applyProgress(progress)
             end
         end
 
-        self.ui:handleEvent(Event:new("GoToPercent", tonumber(progress.end_progress)))
+        self.ui:handleEvent(Event:new("GotoPercent", tonumber(progress.end_progress)))
     else
         -- Write doc metadata
         self.doc_metadata:setProgress(
