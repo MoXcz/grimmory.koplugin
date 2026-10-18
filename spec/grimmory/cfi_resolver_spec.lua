@@ -314,6 +314,45 @@ describe("GrimmoryCFIResolver", function()
                 actual
             )
         end)
+
+        it("skips an XML declaration and comments between elements", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html><head></head><body><p>First</p><!-- note --><p>Second paragraph</p></body></html>]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/4/1:3)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/p[2]/text().3")
+            )
+            assert.are.equal(
+                "/body/DocFragment[12]/body/p[2]/text().3",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/4/1:3)")
+            )
+        end)
+
+        it("converts a position late in a long chapter", function()
+            local paragraphs = {}
+            for index = 1, 1200 do
+                table.insert(paragraphs, "<p>Paragraph " .. index .. " with <i>some</i> text.</p>")
+            end
+
+            fake_document.getDocumentFileContent = spy.new(function()
+                return "<html><head></head><body>" .. table.concat(paragraphs, "\n") .. "</body></html>"
+            end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            local actual = cfi_resolver:xpointerToCFI(
+                "/body/DocFragment[12]/body/p[1100]/text().5"
+            )
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2200/1:5)",
+                actual
+            )
+        end)
     end)
 
     describe("cfiRangeToXPointers", function()

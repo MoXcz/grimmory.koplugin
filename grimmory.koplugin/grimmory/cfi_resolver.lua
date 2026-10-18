@@ -4,9 +4,8 @@ local GrimmoryLogger = require("grimmory/logger")
 
 local logger = GrimmoryLogger:new()
 
--- The default number of tokens we will bail after
--- to prevent runaway and performance degradation.
-local DEFAULT_TOKEN_LIMIT = 2500
+-- Guards against runaway input; long chapters easily pass a few thousand tokens.
+local DEFAULT_TOKEN_LIMIT = 100000
 
 local HTML_VOID_ELEMENT_TAGS = {
     area=true,
@@ -24,18 +23,6 @@ local HTML_VOID_ELEMENT_TAGS = {
     track=true,
     wbr=true,
 }
-
-local function find_first(s, patterns, index)
-    local res = {}
-    for _, p in ipairs(patterns) do
-        local match = { s:find(p, index, true) }
-        if #match > 0 and (#res == 0 or match[1] < res[1]) then
-            res = match
-        end
-    end
-
-    return table.unpack(res)
-end
 
 ---@param html string
 ---@return function token_iterator
@@ -59,7 +46,8 @@ local function tokenize_html(html, token_limit)
                 error("Too many tokens")
             end
 
-            local start = find_first(html, {"<!--", "<?", "<"}, pos)
+            -- Comments and processing instructions also start with "<"; the prefix checks below sort them out.
+            local start = html:find("<", pos, true)
             if not start then
                 local text = html:sub(pos)
                 pos = #html
