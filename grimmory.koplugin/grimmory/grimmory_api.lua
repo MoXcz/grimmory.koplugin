@@ -15,6 +15,9 @@ local logger = GrimmoryLogger:new()
 -- Each sync runs in a forked subprocess, so tokens kept only in memory would not outlive the run.
 local TOKEN_STORE_PATH = DataStorage:getSettingsDir() .. "/grimmory_tokens.lua"
 
+-- Grimmory rejects larger pages.
+local BOOKS_PAGE_SIZE = 100
+
 
 ---@param value any
 ---@param converter function
@@ -498,7 +501,7 @@ end
 function GrimmoryAPI:getBooksPage(page_number)
     local ok, _, body = self:request(
         "GET",
-        "/api/v1/books/page?sort=addedOn&page=" .. tostring(page_number or 0)
+        "/api/v1/books/page?sort=addedOn&size=" .. BOOKS_PAGE_SIZE .. "&page=" .. tostring(page_number or 0)
     )
 
     if not ok or type(body) == "string" then

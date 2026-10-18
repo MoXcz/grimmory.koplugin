@@ -63,6 +63,7 @@ local login_count = 0
 local refresh_count = 0
 local rejects_every_token = false
 local rejects_refresh = false
+local books_page = {}
 
 local function fake_request(request)
     table.insert(requests, request.url)
@@ -85,6 +86,8 @@ local function fake_request(request)
         local token = (request.headers["Authorization"] or ""):match("^Bearer (.+)$")
         if not valid_tokens[token] or rejects_every_token then
             code, body = 401, { message = "Unauthorized" }
+        elseif request.url:match("/api/v1/books/page") then
+            code, body = 200, { content = books_page, page = { totalElements = #books_page } }
         else
             code, body = 200, { current = "1.0.0" }
         end
@@ -160,6 +163,7 @@ describe("GrimmoryAPI", function()
         refresh_count = 0
         rejects_every_token = false
         rejects_refresh = false
+        books_page = {}
     end)
 
     describe("request", function()
@@ -285,6 +289,18 @@ describe("GrimmoryAPI", function()
 
             assert.is_false(ok)
             assert.are.equal(2, login_count)
+        end)
+    end)
+
+    describe("getBooksPage", function()
+        it("asks for full pages", function()
+            books_page = { { id = 1, primaryFile = { fileName = "a.epub" } } }
+
+            local ok, books = new_api():getBooksPage(0)
+
+            assert.is_true(ok)
+            assert.are.equal(1, #books)
+            assert.is_truthy(requests[#requests]:find("size=100&page=0", 1, true))
         end)
     end)
 end)
