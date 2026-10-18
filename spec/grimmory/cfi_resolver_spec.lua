@@ -315,6 +315,187 @@ describe("GrimmoryCFIResolver", function()
             )
         end)
 
+        it("converts text that follows a leading inline element", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><p><i>Italic</i> rest of text</p></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/3:3)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/p/text().3")
+            )
+            assert.are.equal(
+                "/body/DocFragment[12]/body/p/text().3",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/3:3)")
+            )
+        end)
+
+        it("skips empty text nodes when indexing text()", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><div><p><span epub:type="pagebreak"/>first real<span/>second real</p></div></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/2/5:2)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/div/p/text()[2].2")
+            )
+        end)
+
+        it("fails for a text node the chapter does not have", function()
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.has_error(function()
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/div/p/text()[9].1")
+            end, "Unable to find XPointer text in document")
+        end)
+
+        it("skips the whitespace crengine drops around indented markup", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body>
+<div>
+    <p>
+        <i>Leading</i> after italic <b>bold</b> <i>italic</i> tail
+    </p>
+</div>
+</body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            for _, case in ipairs({
+                { xpointer = "/body/DocFragment[12]/body/div/p/text().3", cfi = "epubcfi(/6/24!/4/2/2/3:3)" },
+                { xpointer = "/body/DocFragment[12]/body/div/p/text()[3].2", cfi = "epubcfi(/6/24!/4/2/2/7:2)" },
+            }) do
+                assert.are.equal(case.cfi, cfi_resolver:xpointerToCFI(case.xpointer))
+                assert.are.equal(case.xpointer, cfi_resolver:cfiToXpointer(case.cfi))
+            end
+        end)
+
+        it("keeps whitespace inside preformatted text", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><pre>
+  <i>a</i> mid <b>b</b> after</pre></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/3:1)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/pre/text()[2].1")
+            )
+        end)
+
+        it("drops the whitespace on either side of a block sibling", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><div><i>a</i> <p>x</p> <i>d</i> tail</div></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/7:2)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/div/text().2")
+            )
+            assert.are.equal(
+                "/body/DocFragment[12]/body/div/text().2",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/7:2)")
+            )
+        end)
+
+        it("keeps whitespace after text that a comment splits off", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><p>head<!-- c -->
+<i>bb</i> tail <b>z</b> more</p></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/3:1)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/p/text()[3].1")
+            )
+            assert.are.equal(
+                "/body/DocFragment[12]/body/p/text()[3].1",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/3:1)")
+            )
+        end)
+
+        it("keeps leading whitespace inside an inline element", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><p><span> <b>x</b> y <i>z</i> w</span> tail</p></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/2/3:1)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/p/span/text()[2].1")
+            )
+        end)
+
+        it("counts a comment-split chunk in characters, not bytes", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><p>café AT&amp;T<!-- c -->Q tail</p></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/1:11)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/p/text()[2].2")
+            )
+            assert.are.equal(
+                "/body/DocFragment[12]/body/p/text()[2].2",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/1:11)")
+            )
+        end)
+
+        it("counts character references, astral characters and CRLF as the parsed text has them", function()
+            local emoji = string.char(0xF0, 0x9F, 0x98, 0x80)
+
+            -- Built in a normal string: a long string would turn the CRLF into a lone newline.
+            fake_document.getDocumentFileContent = spy.new(function()
+                return "<html><head></head><body><p>a&#8217;b&#x2019;" .. emoji
+                    .. "\r\n<!-- c -->Q tail</p></body></html>"
+            end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/1:7)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/p/text()[2].0")
+            )
+            assert.are.equal(
+                "/body/DocFragment[12]/body/p/text()[2].0",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/1:7)")
+            )
+        end)
+
+        it("keeps a CFI offset past the end of the text at its end", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><div>&amp;</div></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "/body/DocFragment[12]/body/div/text().1",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/1:35)")
+            )
+        end)
+
+        it("fails for a CFI step that is not a number", function()
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.has_error(function()
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/x/2)")
+            end, "could not translate from local path to xpointer")
+        end)
+
         it("skips an XML declaration and comments between elements", function()
             fake_document.getDocumentFileContent = spy.new(function() return [[<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -330,6 +511,81 @@ describe("GrimmoryCFIResolver", function()
                 "/body/DocFragment[12]/body/p[2]/text().3",
                 cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/4/1:3)")
             )
+        end)
+
+        it("keeps the whitespace after an inline element at the end of a paragraph", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><p>text <i>x</i> </p></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/3:1)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/p/text()[2].1")
+            )
+            assert.are.equal(
+                "/body/DocFragment[12]/body/p/text()[2].1",
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/3:1)")
+            )
+        end)
+
+        it("fails for whitespace crengine drops at the end of a block that holds blocks", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><div><p>one</p><i>a</i> b<i>c</i>
+</div></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.has_error(function()
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/7:0)")
+            end, "could not translate from local path to xpointer")
+        end)
+
+        it("counts text split by a comment as one chunk", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><p><i>aa</i>
+<!-- note -->tail text</p><p>head<!-- note --> <i>bb</i> tail</p></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            for _, case in ipairs({
+                { xpointer = "/body/DocFragment[12]/body/p/text()[2].2", cfi = "epubcfi(/6/24!/4/2/3:3)" },
+                { xpointer = "/body/DocFragment[12]/body/p[2]/i/text().1", cfi = "epubcfi(/6/24!/4/4/2/1:1)" },
+            }) do
+                assert.are.equal(case.cfi, cfi_resolver:xpointerToCFI(case.xpointer))
+                assert.are.equal(case.xpointer, cfi_resolver:cfiToXpointer(case.cfi))
+            end
+        end)
+
+        it("keeps all whitespace when crengine has more text than its default styles leave", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><div class="code">
+<span>kw</span> rest
+</div></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.are.equal(
+                "epubcfi(/6/24!/4/2/3:1)",
+                cfi_resolver:xpointerToCFI("/body/DocFragment[12]/body/div/text()[2].1")
+            )
+        end)
+
+        it("fails for a CFI at whitespace crengine drops", function()
+            fake_document.getDocumentFileContent = spy.new(function() return [[CDATA
+<html><head></head><body><div>
+<p>x</p></div></body></html>
+            ]] end)
+
+            local cfi_resolver = GrimmoryCFIResolver:new(fake_document)
+
+            assert.has_error(function()
+                cfi_resolver:cfiToXpointer("epubcfi(/6/24!/4/2/1:0)")
+            end, "could not translate from local path to xpointer")
         end)
 
         it("converts a position late in a long chapter", function()
