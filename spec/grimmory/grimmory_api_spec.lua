@@ -293,14 +293,18 @@ describe("GrimmoryAPI", function()
     end)
 
     describe("getBooksPage", function()
-        it("asks for full pages", function()
-            books_page = { { id = 1, primaryFile = { fileName = "a.epub" } } }
+        it("asks for full pages and notes which books have KOReader progress", function()
+            books_page = {
+                { id = 1, primaryFile = { fileName = "a.epub" }, koreaderProgress = { percentage = 12.5 } },
+                { id = 2, primaryFile = { fileName = "b.epub" } },
+            }
 
             local ok, books = new_api():getBooksPage(0)
 
             assert.is_true(ok)
-            assert.are.equal(1, #books)
             assert.is_truthy(requests[#requests]:find("size=100&page=0", 1, true))
+            assert.is_true(books[1].has_koreader_progress)
+            assert.is_false(books[2].has_koreader_progress)
         end)
     end)
 end)

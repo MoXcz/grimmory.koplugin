@@ -70,6 +70,7 @@ end
 ---@field shelves number[]
 ---@field metadata BookMetadata
 ---@field primary_file BookFile | nil
+---@field has_koreader_progress boolean whether Grimmory holds KOReader progress for this book
 
 ---@class GrimmoryAnnotation
 ---@field id number | nil
@@ -117,7 +118,9 @@ local function parse_book(book)
         added_on = from_json_iso8601(book["addedOn"]),
         shelves = shelves,
         metadata = metadata,
-        primary_file = primary_file
+        primary_file = primary_file,
+        -- Grimmory fills this only when it holds a KOReader percentage, the same one the progress endpoint returns.
+        has_koreader_progress = type(book["koreaderProgress"]) == "table",
     }
 end
 

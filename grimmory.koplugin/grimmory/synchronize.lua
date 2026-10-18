@@ -13,6 +13,7 @@ local logger = GrimmoryLogger:new()
 ---@field settings GrimmorySettings
 ---@field api GrimmoryAPI
 ---@field doc_metadata GrimmoryDocMetadata
+---@field private is_koreader_progress_listed boolean whether this sync's book list has shown KOReader progress
 local GrimmorySynchronize = {}
 
 function GrimmorySynchronize:new(o)
@@ -832,7 +833,12 @@ function GrimmorySynchronize:pullBook(book, callback)
         -- After we're done, if the book exists we should attach it
         -- to associated shelves and pull the book progress.
         self:associateWithShelves(download_path, book.shelves or {})
-        self:pullBookProgress(download_path, callback, partial_md5)
+
+        -- Without KOReader progress on Grimmory the pull could only find none, so skip its request; only
+        -- once the list has shown the field, in case a server version leaves it out.
+        if book.has_koreader_progress or not self.is_koreader_progress_listed then
+            self:pullBookProgress(download_path, callback, partial_md5)
+        end
     end
 
     return download_path, is_downloaded
@@ -884,8 +890,13 @@ function GrimmorySynchronize:pullBooks(callback)
 
     local seen_books = {}
     local seen_grimmory_ids = {}
+    self.is_koreader_progress_listed = false
 
     for book, element_count, total_books in self.api:getBooks() do
+        if book.has_koreader_progress then
+            self.is_koreader_progress_listed = true
+        end
+
         if self:isTargetBook(book) then
             seen_grimmory_ids[tostring(book.id)] = true
 

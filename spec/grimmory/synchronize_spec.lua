@@ -422,6 +422,99 @@ describe("GrimmorySynchronize", function()
                 .was_called_with(synchronizer.repository, "/books/a.epub", 5, "md5-read")
         end)
 
+        it("skips the progress lookup when the list shows Grimmory has none for the book", function()
+            local synchronizer = new_synchronizer()
+            synchronizer.is_koreader_progress_listed = true
+
+            synchronizer:pullBook({ id = 5, has_koreader_progress = false }, function() end)
+
+            assert.stub(synchronizer.pullBookProgress).was_not_called()
+        end)
+
+        it("still looks up progress while the list has never shown it", function()
+            local synchronizer = new_synchronizer()
+            synchronizer.is_koreader_progress_listed = false
+
+            synchronizer:pullBook({ id = 5, has_koreader_progress = false }, function() end)
+
+            assert.stub(synchronizer.pullBookProgress).was_called(1)
+        end)
+    end)
+
+    describe("pullBooks", function()
+        local util = require("util")
+
+        ---@param listed_books table[] the books each sync's list returns
+        local function new_synchronizer(listed_books)
+            local synchronizer = GrimmorySynchronize:new({
+                settings = new_settings({ getDownloadsBooks = true, getDownloadDirectory = "/books" }),
+                repository = { upsertBook = function() return true, 1, 5 end },
+                api = {
+                    getBooks = function()
+                        local index = 0
+
+                        return function()
+                            index = index + 1
+                            if listed_books[index] ~= nil then
+                                return listed_books[index], index, #listed_books
+                            end
+                        end
+                    end,
+                },
+            })
+
+            stub(synchronizer, "isTargetBook", function() return true end)
+            stub(synchronizer, "getBookDownloadPath", function(_, book)
+                return "/books/" .. book.id .. ".epub", "md5-" .. book.id
+            end)
+            stub(synchronizer, "associateWithShelves")
+            stub(synchronizer, "pullBookProgress")
+
+            return synchronizer
+        end
+
+        ---@return string[] paths the books whose progress was looked up
+        local function progress_lookups(synchronizer)
+            local paths = {}
+
+            for _, call in ipairs(synchronizer.pullBookProgress.calls) do
+                table.insert(paths, call.vals[2])
+            end
+
+            return paths
+        end
+
+        before_each(function()
+            util.makePath = function() return true end
+            util.fileExists = function() return true end
+            util.findFiles = function() end
+        end)
+
+        after_each(function()
+            util.makePath = nil
+            util.fileExists = nil
+            util.findFiles = nil
+        end)
+
+        it("skips progress lookups only after the list has shown KOReader progress, again for each sync", function()
+            local listed_books = {
+                { id = 1, has_koreader_progress = false },
+                { id = 2, has_koreader_progress = true },
+                { id = 3, has_koreader_progress = false },
+            }
+            local synchronizer = new_synchronizer(listed_books)
+
+            synchronizer:pullBooks(function() end)
+
+            assert.are.same({ "/books/1.epub", "/books/2.epub" }, progress_lookups(synchronizer))
+
+            listed_books[2] = { id = 2, has_koreader_progress = false }
+            synchronizer.pullBookProgress:clear()
+
+            synchronizer:pullBooks(function() end)
+
+            assert.are.same({ "/books/1.epub", "/books/2.epub", "/books/3.epub" }, progress_lookups(synchronizer))
+        end)
     end)
 
     describe("pullBookProgress", function()
