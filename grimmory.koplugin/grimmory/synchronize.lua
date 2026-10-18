@@ -373,57 +373,86 @@ function GrimmorySynchronize:synchronizeShelves(callback)
         end
     end
 
-    -- Read through existing collections and compare against shelves
-    for collection_name, _ in pairs(ReadCollection.coll) do
+    -- A copy, because renaming adds keys to ReadCollection.coll, which pairs() must not meet mid-traversal.
+    local collection_names = {}
+    for collection_name in pairs(ReadCollection.coll) do
+        table.insert(collection_names, collection_name)
+    end
+
+    local function is_named_like_shelf(collection_name)
+        local shelf_id = shelf_name_to_id[collection_name:lower()]
+        return shelf_id ~= nil and shelf_id_to_name[tostring(shelf_id)] == collection_name
+    end
+
+    -- Collections named exactly like a shelf go first, so they win over case variants; the rest sort by name.
+    table.sort(collection_names, function(a, b)
+        local a_is_named, b_is_named = is_named_like_shelf(a), is_named_like_shelf(b)
+        if a_is_named ~= b_is_named then
+            return a_is_named
+        end
+
+        return a < b
+    end)
+
+    -- Names match case-insensitively, so connections are tracked by shelf ID to never create a second collection.
+    local is_shelf_connected = {}
+
+    for _, collection_name in ipairs(collection_names) do
         local shelf_id = ReadCollection.coll_settings[collection_name].connectorId
 
         if shelf_id then
-            if shelf_id_to_name[tostring(shelf_id)] then
-                local shelf_name = shelf_id_to_name[tostring(shelf_id)]
+            local shelf_key = tostring(shelf_id)
+            local shelf_name = shelf_id_to_name[shelf_key]
 
-                -- This collection exists as a shelf so we should update it
-                -- if there's anything that needs to change.
-                if shelf_name:lower() ~= collection_name:lower() then
-                    -- This collection has been renamed!
-                    logger:info("Renaming collection to match shelf name:", collection_name, ";", shelf_name)
-
-                    ReadCollection:renameCollection(collection_name, shelf_name)
-
-                    callback({
-                        state = "shelf-rename",
-                        shelf_id = shelf_id,
-                        shelf_name = shelf_name,
-                    })
-                end
-            else
+            if shelf_name == nil or is_shelf_connected[shelf_key] then
+                -- Gone, or already mirrored by another collection: keep this one, but unlinked.
                 logger:info("Disconnecting collection from shelf:", collection_name)
-                -- This was a shelf but the shelf is gone in the connector
-                -- Don't delete the shelf but break the connection.
                 ReadCollection.coll_settings[collection_name].connectorId = nil
-
-                -- Set the shelf ID to nil so the block below will pick
-                -- it up if it's a shelf being deleted and recreated
-                shelf_id = nil
 
                 callback({
                     state = "shelf-disconnect",
                     shelf_id = shelf_id,
                     shelf_name = collection_name,
                 })
+            else
+                is_shelf_connected[shelf_key] = true
+
+                if shelf_name:lower() ~= collection_name:lower() then
+                    if ReadCollection.coll[shelf_name] then
+                        logger:warn("Not renaming collection onto an existing one:", collection_name, ";", shelf_name)
+                    else
+                        logger:info("Renaming collection to match shelf name:", collection_name, ";", shelf_name)
+
+                        ReadCollection:renameCollection(collection_name, shelf_name)
+
+                        callback({
+                            state = "shelf-rename",
+                            shelf_id = shelf_id,
+                            shelf_name = shelf_name,
+                        })
+                    end
+                end
             end
         end
+    end
 
-        if shelf_id == nil and shelf_name_to_id[collection_name:lower()] then
-            -- If there is no shelf attached to this collection but we
-            -- know one exists we should attach it.
-            shelf_id = shelf_name_to_id[collection_name:lower()]
+    for _, collection_name in ipairs(collection_names) do
+        local collection_settings = ReadCollection.coll_settings[collection_name]
+        local shelf_id = shelf_name_to_id[collection_name:lower()]
 
+        if (
+            collection_settings ~= nil and
+            collection_settings.connectorId == nil and
+            shelf_id ~= nil and
+            not is_shelf_connected[tostring(shelf_id)]
+        ) then
             logger:info(
                 "Found an existing collection that can be attached to a shelf:",
                 collection_name, ";" , shelf_id
             )
 
-            ReadCollection.coll_settings[collection_name].connectorId = shelf_id
+            collection_settings.connectorId = shelf_id
+            is_shelf_connected[tostring(shelf_id)] = true
 
             callback({
                 state = "shelf-connect",
@@ -433,9 +462,14 @@ function GrimmorySynchronize:synchronizeShelves(callback)
         end
     end
 
-    -- Make sure every shelf has a collection and create them if not
-    for shelf_id, shelf_name in pairs(shelf_id_to_name) do
-        if not ReadCollection.coll_settings[shelf_name] then
+    for shelf_key, shelf_name in pairs(shelf_id_to_name) do
+        if is_shelf_connected[shelf_key] then
+            logger:dbg("Shelf already has a collection:", shelf_name)
+        elseif ReadCollection.coll_settings[shelf_name] then
+            logger:warn("Not adding a collection for shelf, the name is taken:", shelf_name)
+        else
+            local shelf_id = shelf_name_to_id[shelf_name:lower()]
+
             logger:info("Adding a collection from a shelf", shelf_name, shelf_id)
 
             ReadCollection:addCollection(shelf_name)

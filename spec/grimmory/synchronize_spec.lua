@@ -20,11 +20,25 @@ package.preload["grimmory/logger"] = function()
 end
 
 package.preload["readcollection"] = function()
-    return {
+    local ReadCollection = {
         coll = {},
         coll_settings = {},
         write = function() end,
     }
+
+    function ReadCollection:addCollection(name)
+        self.coll_settings[name] = { order = 1 }
+        self.coll[name] = {}
+    end
+
+    function ReadCollection:renameCollection(name, new_name)
+        self.coll_settings[new_name] = self.coll_settings[name]
+        self.coll[new_name] = self.coll[name]
+        self.coll_settings[name] = nil
+        self.coll[name] = nil
+    end
+
+    return ReadCollection
 end
 
 package.preload["ffi/MD5"] = function()
@@ -109,6 +123,114 @@ describe("GrimmorySynchronize", function()
             end)
 
             assert.stub(synchronizer.pushAllPendingBookMetadata).was_not_called()
+        end)
+    end)
+
+    describe("synchronizeShelves", function()
+        local ReadCollection = require("readcollection")
+
+        ---@param shelves { id: number, name: string }[]
+        ---@param connections { [string]: number | string | false } collection name to its shelf ID, false when unlinked
+        ---@return string[] states the progress states the sync reported
+        local function synchronize_shelves(shelves, connections)
+            ReadCollection.coll = {}
+            ReadCollection.coll_settings = {}
+
+            for name, connector_id in pairs(connections) do
+                ReadCollection.coll[name] = {}
+                ReadCollection.coll_settings[name] = { order = 1, connectorId = connector_id or nil }
+            end
+
+            local synchronizer = GrimmorySynchronize:new({
+                settings = new_settings({ getSyncShelves = true }),
+                api = { getShelves = function() return true, shelves end },
+            })
+
+            local states, callback = collect_states()
+            synchronizer:synchronizeShelves(callback)
+
+            return states
+        end
+
+        ---@return { [string]: number | string | false } collection name to its shelf ID, false when unlinked
+        local function connector_ids()
+            local result = {}
+
+            for name, settings in pairs(ReadCollection.coll_settings) do
+                result[name] = settings.connectorId or false
+            end
+
+            return result
+        end
+
+        it("attaches a collection whose name differs from the shelf only in case", function()
+            local states = synchronize_shelves({ { id = 5, name = "Fantasy" } }, { fantasy = false })
+
+            assert.are.same({ fantasy = 5 }, connector_ids())
+            assert.are.same({ "shelf-connect" }, states)
+        end)
+
+        it("attaches the collection named exactly like the shelf", function()
+            synchronize_shelves({ { id = 5, name = "Fantasy" } }, { fantasy = false, Fantasy = false, FANTASY = false })
+
+            assert.are.same({ fantasy = false, Fantasy = 5, FANTASY = false }, connector_ids())
+        end)
+
+        it("keeps a connected collection when its shelf changes only in case", function()
+            local states = synchronize_shelves({ { id = 5, name = "sci-fi" } }, { ["Sci-Fi"] = 5 })
+
+            assert.are.same({ ["Sci-Fi"] = 5 }, connector_ids())
+            assert.are.same({}, states)
+        end)
+
+        it("keeps a collection connected with a shelf ID stored as a string", function()
+            local states = synchronize_shelves({ { id = 5, name = "Fantasy" } }, { Fantasy = "5" })
+
+            assert.are.same({ Fantasy = "5" }, connector_ids())
+            assert.are.same({}, states)
+        end)
+
+        it("unlinks the twin of a collection that already mirrors the shelf", function()
+            local states = synchronize_shelves({ { id = 5, name = "Fantasy" } }, { fantasy = 5, Fantasy = "5" })
+
+            assert.are.same({ fantasy = false, Fantasy = "5" }, connector_ids())
+            assert.are.same({ "shelf-disconnect" }, states)
+        end)
+
+        it("renames a connected collection after its shelf", function()
+            local states = synchronize_shelves({ { id = 5, name = "Space" } }, { ["Sci-Fi"] = 5 })
+
+            assert.are.same({ Space = 5 }, connector_ids())
+            assert.are.same({ "shelf-rename" }, states)
+        end)
+
+        it("does not rename a collection onto another one", function()
+            synchronize_shelves({ { id = 5, name = "Taken" } }, { Old = 5, Taken = false })
+
+            assert.are.same({ Old = 5, Taken = false }, connector_ids())
+        end)
+
+        it("does not add a collection over one that uses the shelf's name", function()
+            synchronize_shelves(
+                { { id = 5, name = "Taken" }, { id = 9, name = "Other" } },
+                { Taken = 9, Other = false }
+            )
+
+            assert.are.same({ Taken = 9, Other = false }, connector_ids())
+        end)
+
+        it("adds a collection for a new shelf", function()
+            local states = synchronize_shelves({ { id = 7, name = "New" } }, {})
+
+            assert.are.same({ New = 7 }, connector_ids())
+            assert.are.same({ "shelf-add" }, states)
+        end)
+
+        it("reconnects a collection whose shelf was recreated", function()
+            local states = synchronize_shelves({ { id = 8, name = "Favorites" } }, { Favorites = 3 })
+
+            assert.are.same({ Favorites = 8 }, connector_ids())
+            assert.are.same({ "shelf-disconnect", "shelf-connect" }, states)
         end)
     end)
 
