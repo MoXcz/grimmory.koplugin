@@ -193,9 +193,20 @@ end
 
 ---@param cfi_resolver GrimmoryCFIResolver
 ---@param annotation GrimmoryAnnotation
----@return table koreader_annotation
+---@return table | nil koreader_annotation nil when the CFI cannot be placed in this document
 local function to_koreader_annotation(cfi_resolver, annotation)
-    local xpointer_start, xpointer_end = cfi_resolver:cfiRangeToXPointers(annotation.cfi)
+    local placed, start_or_error, xpointer_end = pcall(
+        cfi_resolver.cfiRangeToXPointers,
+        cfi_resolver,
+        annotation.cfi
+    )
+
+    if not placed then
+        logger:warn("Skipping annotation that cannot be placed:", annotation.id, start_or_error)
+        return nil
+    end
+
+    local xpointer_start = start_or_error
 
     return {
         grimmory_id = annotation.id,
@@ -263,6 +274,7 @@ function GrimmoryReadingAnnotations:applyAnnotations(book_path, grimmory_annotat
     return true
 end
 
+---Highlights whose position cannot be converted come back with a nil `cfi`.
 ---@return boolean ok false when the book cannot be read
 ---@return GrimmoryAnnotation[] | nil annotations
 function GrimmoryReadingAnnotations:getAnnotations(book_path)
@@ -276,6 +288,18 @@ function GrimmoryReadingAnnotations:getAnnotations(book_path)
             for index, annotation in ipairs(annotations) do
                 -- Annotations without pos0 / pos1 are bookmarks
                 if annotation.pos0 ~= nil and annotation.pos1 ~= nil then
+                    local converted, cfi = pcall(
+                        cfi_resolver.xpointerRangeToCFI,
+                        cfi_resolver,
+                        annotation.pos0,
+                        annotation.pos1
+                    )
+
+                    if not converted then
+                        logger:warn("Cannot convert annotation to a CFI:", annotation.pos0, cfi)
+                        cfi = nil
+                    end
+
                     ---@type GrimmoryAnnotation
                     local grimmory_annotation = {
                         id = annotation.grimmory_id,
@@ -283,7 +307,7 @@ function GrimmoryReadingAnnotations:getAnnotations(book_path)
                         local_index = index,
                         created_at = GrimmoryDatetime.fromAnnotationDatetime(annotation.datetime),
                         updated_at = GrimmoryDatetime.fromAnnotationDatetime(annotation.datetime_updated),
-                        cfi = cfi_resolver:xpointerRangeToCFI(annotation.pos0, annotation.pos1),
+                        cfi = cfi,
                         chapter = annotation.chapter,
                         text = annotation.text,
                         note = annotation.note,

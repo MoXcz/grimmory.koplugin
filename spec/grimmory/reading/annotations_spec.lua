@@ -147,6 +147,21 @@ describe("GrimmoryReadingAnnotations", function()
             )
         end)
 
+        it("keeps a local annotation whose Grimmory copy cannot be placed", function()
+            fake_doc_metadata.getAnnotations.returns({ local_grimmory_annotation })
+            fake_cfi_resolver.cfiRangeToXPointers = spy.new(function() error("unknown CFI") end)
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            annotations:applyAnnotations("book_path", { remote_grimmory_annotation })
+
+            assert.spy(fake_doc_metadata.setAnnotations).was_called_with(
+                match._,
+                match.same("book_path"),
+                match.same({ local_grimmory_annotation })
+            )
+        end)
+
         it("keeps a pending edit instead of taking Grimmory's version", function()
             local edited = {
                 grimmory_id = 27,
@@ -303,6 +318,19 @@ describe("GrimmoryReadingAnnotations", function()
             assert.equal(1, #actual)
             assert.equal("#FFC107", actual[1].color)
             assert.equal("highlight", actual[1].style)
+            assert.equal(1, actual[1].local_index)
+        end)
+
+        it("keeps annotations that cannot be converted, without a CFI", function()
+            fake_doc_metadata.getAnnotations.returns({ local_annotation })
+            fake_cfi_resolver.xpointerRangeToCFI = spy.new(function() error("Too many tokens") end)
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            local _, actual = annotations:getAnnotations("book_path")
+
+            assert.equal(1, #actual)
+            assert.is_nil(actual[1].cfi)
             assert.equal(1, actual[1].local_index)
         end)
 

@@ -76,7 +76,7 @@ end
 ---@field book_id number
 ---@field created_at number
 ---@field updated_at number | nil
----@field cfi string
+---@field cfi string | nil nil on a local annotation whose position cannot be converted
 ---@field text string
 ---@field note string | nil
 ---@field chapter string

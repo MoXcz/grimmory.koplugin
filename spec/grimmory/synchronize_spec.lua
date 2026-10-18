@@ -976,6 +976,20 @@ describe("GrimmorySynchronize", function()
                 .was_called_with(synchronizer.doc_metadata, "/books/a.epub", 9)
         end)
 
+        it("leaves an edit pending when the annotation cannot be converted", function()
+            local synchronizer = new_synchronizer({
+                local_annotations = { { id = 7, local_index = 1 } },
+                remote_annotations = { { id = 7, cfi = "cfi-a" } },
+                modified_ids = { 7 },
+            })
+
+            synchronizer:pushBookAnnotations("/books/a.epub", 5)
+
+            assert.spy(synchronizer.api.updateAnnotation).was_not_called()
+            assert.spy(synchronizer.api.deleteAnnotation).was_not_called()
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation).was_not_called()
+        end)
+
         it("links to the copy a create that seemed to fail left on Grimmory", function()
             local synchronizer = new_synchronizer({
                 local_annotations = { annotation() },

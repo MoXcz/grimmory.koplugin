@@ -330,10 +330,13 @@ end
 ---@param is_modified_by_id { [string]: boolean }
 function GrimmorySynchronize:pushLocalChanges(push, local_annotations, is_modified_by_id)
     for _, annotation in ipairs(local_annotations) do
-        if annotation.id == nil then
-            self:createOrLinkAnnotation(push, annotation)
-        elseif is_modified_by_id[tostring(annotation.id)] then
-            self:pushEditedAnnotation(push, annotation)
+        -- An annotation without a CFI cannot be sent; any pending edit of it waits for a later sync.
+        if annotation.cfi ~= nil then
+            if annotation.id == nil then
+                self:createOrLinkAnnotation(push, annotation)
+            elseif is_modified_by_id[tostring(annotation.id)] then
+                self:pushEditedAnnotation(push, annotation)
+            end
         end
     end
 end
