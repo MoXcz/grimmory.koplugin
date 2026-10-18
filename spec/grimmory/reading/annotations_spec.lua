@@ -7,13 +7,22 @@ package.path = "grimmory.koplugin/?.lua;" .. package.path
 
 
 local fake_document = stub.new()
-local mock_has_provider = spy.new(function() return true end)
-local mock_open_document = spy.new(function() return fake_document end)
+local opened_document = fake_document
+
+package.preload["grimmory/logger"] = function()
+    local quiet = function() end
+
+    return {
+        new = function()
+            return { err = quiet, warn = quiet, info = quiet, dbg = quiet }
+        end
+    }
+end
 
 package.preload["document/documentregistry"] = function()
     return {
-        hasProvider = mock_has_provider,
-        openDocument = mock_open_document,
+        hasProvider = function() return true end,
+        openDocument = function() return opened_document end,
     }
 end
 
@@ -72,6 +81,7 @@ local local_annotation = {
 
 describe("GrimmoryReadingAnnotations", function()
     before_each(function()
+        opened_document = fake_document
         fake_document.loadDocument = spy.new(function() return true end)
         fake_document.close = spy.new(function() end)
 
@@ -135,6 +145,26 @@ describe("GrimmoryReadingAnnotations", function()
                 expected
             )
         end)
+
+        it("leaves annotations untouched when the book cannot be opened", function()
+            opened_document = nil
+            fake_doc_metadata.getAnnotations.returns({ local_grimmory_annotation })
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            assert.is_false(annotations:applyAnnotations("book_path", {}))
+            assert.stub(fake_doc_metadata.setAnnotations).was_not_called()
+        end)
+
+        it("closes the book when it fails to load", function()
+            fake_document.loadDocument = spy.new(function() return false end)
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            assert.is_false(annotations:applyAnnotations("book_path", { remote_grimmory_annotation }))
+            assert.spy(fake_document.close).was_called()
+            assert.stub(fake_doc_metadata.setAnnotations).was_not_called()
+        end)
     end)
 
     describe("getAnnotations", function()
@@ -143,11 +173,21 @@ describe("GrimmoryReadingAnnotations", function()
 
             local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
 
-            local actual = annotations:getAnnotations("book_path")
+            local ok, actual = annotations:getAnnotations("book_path")
 
+            assert.is_true(ok)
             assert.equal(1, #actual)
             assert.equal("#FFC107", actual[1].color)
             assert.equal("highlight", actual[1].style)
+        end)
+
+        it("returns nothing when the book cannot be opened", function()
+            opened_document = nil
+            fake_doc_metadata.getAnnotations.returns({ local_annotation })
+
+            local annotations = GrimmoryReadingAnnotations:new(fake_doc_metadata)
+
+            assert.is_false((annotations:getAnnotations("book_path")))
         end)
     end)
 end)

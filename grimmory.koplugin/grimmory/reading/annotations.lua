@@ -2,29 +2,39 @@ local DocumentRegistry = require("document/documentregistry")
 
 local GrimmoryCFIResolver = require("grimmory/cfi_resolver")
 local GrimmoryDatetime = require("grimmory/datetime")
+local GrimmoryLogger = require("grimmory/logger")
+
+local logger = GrimmoryLogger:new()
 
 ---@param document_path string
 ---@param callback (fun(resolver: GrimmoryCFIResolver): nil)
+---@return boolean ok false when the document could not be opened or `callback` failed
 local function with_cfi_resolver(document_path, callback)
     local document = (
         DocumentRegistry:hasProvider(document_path) and
         DocumentRegistry:openDocument(document_path)
     )
 
-    if document then
-        local loaded = true
-        if document.loadDocument then
-            loaded = document:loadDocument(true)
-        end
-
-        if loaded then
-            local cfi_resolver = GrimmoryCFIResolver:new(document)
-
-            callback(cfi_resolver)
-        end
-
-        document:close()
+    if not document then
+        logger:err("Could not open document for annotations:", document_path)
+        return false
     end
+
+    local ok, err = pcall(function()
+        if document.loadDocument and not document:loadDocument(true) then
+            error("Could not load document")
+        end
+
+        callback(GrimmoryCFIResolver:new(document))
+    end)
+
+    document:close()
+
+    if not ok then
+        logger:err("Could not resolve annotations for:", document_path, err)
+    end
+
+    return ok
 end
 
 local KOREADER_COLOR_MAP = {
@@ -185,10 +195,11 @@ end
 
 ---@param book_path string
 ---@param annotations GrimmoryAnnotation[]
+---@return boolean ok false when the book could not be read, leaving its annotations untouched
 function GrimmoryReadingAnnotations:applyAnnotations(book_path, grimmory_annotations)
     local remote_annotations = {}
 
-    with_cfi_resolver(
+    local resolved = with_cfi_resolver(
         book_path,
         function (cfi_resolver)
             for _, annotation in ipairs(grimmory_annotations) do
@@ -220,21 +231,28 @@ function GrimmoryReadingAnnotations:applyAnnotations(book_path, grimmory_annotat
         end
     )
 
+    -- Without the document every remote annotation would look deleted and take its local copy with it.
+    if not resolved then
+        return false
+    end
+
     local local_annotations = self.doc_metadata:getAnnotations(book_path)
 
     local new_annotations = merge_annotations(local_annotations, remote_annotations)
 
     self.doc_metadata:setAnnotations(book_path, new_annotations)
+
+    return true
 end
 
----@return GrimmoryAnnotation[] annotations
+---@return boolean ok false when the book cannot be read
+---@return GrimmoryAnnotation[] | nil annotations
 function GrimmoryReadingAnnotations:getAnnotations(book_path)
-    -- Get annotations for book
     local annotations = self.doc_metadata:getAnnotations(book_path)
 
     local grimmory_annotations = {}
 
-    with_cfi_resolver(
+    local resolved = with_cfi_resolver(
         book_path,
         function(cfi_resolver)
             for _, annotation in ipairs(annotations) do
@@ -260,7 +278,11 @@ function GrimmoryReadingAnnotations:getAnnotations(book_path)
         end
     )
 
-    return grimmory_annotations
+    if not resolved then
+        return false, nil
+    end
+
+    return true, grimmory_annotations
 end
 
 return GrimmoryReadingAnnotations

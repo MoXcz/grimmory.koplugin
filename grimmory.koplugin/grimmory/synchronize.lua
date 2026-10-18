@@ -198,7 +198,11 @@ end
 ---@param book_path string
 ---@param book_grimmory_id integer
 function GrimmorySynchronize:pushBookAnnotations(book_path, book_grimmory_id)
-    local local_annotations = self.reading_annotations:getAnnotations(book_path)
+    local read_ok, local_annotations = self.reading_annotations:getAnnotations(book_path)
+
+    if not read_ok then
+        error("Could not read annotations", 0)
+    end
 
     local modified_grimmory_annotations = self.doc_metadata:getModifiedGrimmoryAnnotations(book_path)
 
@@ -250,15 +254,42 @@ function GrimmorySynchronize:pullBookAnnotations(book_path, book_grimmory_id)
 
     if not annotations_ok or annotations == nil then
         logger:err("Failed pulling annotations from Grimmory:", book_grimmory_id)
-        return
+        error("Could not pull annotations", 0)
     end
 
     logger:dbg("Writing annotations to:", book_path)
 
-    self.reading_annotations:applyAnnotations(
-        book_path,
-        annotations
-    )
+    if not self.reading_annotations:applyAnnotations(book_path, annotations) then
+        error("Could not apply annotations", 0)
+    end
+end
+
+---Reports a failure as `annotations-failed` instead of raising, so the book's progress and sessions still sync.
+---@param book_path string
+---@param book_grimmory_id integer
+---@param callback function
+function GrimmorySynchronize:synchronizeBookAnnotations(book_path, book_grimmory_id, callback)
+    -- Grimmory places annotations with EPUB CFIs, which other formats do not have.
+    if not book_path:lower():match("%.epub$") then
+        logger:info("Skipping annotations, only EPUB books support them:", book_path)
+        return
+    end
+
+    local annotations_ok, annotations_error = pcall(function()
+        logger:info("Pushing book annotations:", book_path)
+        self:pushBookAnnotations(book_path, book_grimmory_id)
+
+        logger:info("Pulling book annotations:", book_path)
+        self:pullBookAnnotations(book_path, book_grimmory_id)
+    end)
+
+    if not annotations_ok then
+        logger:err("Failed to sync annotations for book:", book_path, annotations_error)
+        callback({
+            state = "annotations-failed",
+            book_path = book_path,
+        })
+    end
 end
 
 ---@param book_id integer
@@ -1064,11 +1095,7 @@ function GrimmorySynchronize:synchronizeBook(book_path, refresh_book, callback)
     end
 
     if grimmory_id and self.settings:getSyncAnnotations() then
-        logger:info("Pushing book annotations:", book_path)
-        self:pushBookAnnotations(book_path, grimmory_id)
-
-        logger:info("Pulling book annotations:", book_path)
-        self:pullBookAnnotations(book_path, grimmory_id)
+        self:synchronizeBookAnnotations(book_path, grimmory_id, callback)
     end
 
     -- First, tell Grimmory about all of our reading

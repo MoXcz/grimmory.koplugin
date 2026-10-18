@@ -738,6 +738,49 @@ describe("GrimmorySynchronize", function()
         end)
     end)
 
+    describe("pushBookAnnotations", function()
+        it("fails before touching Grimmory when the annotations cannot be read", function()
+            local synchronizer = GrimmorySynchronize:new({
+                reading_annotations = { getAnnotations = function() return false, nil end },
+                doc_metadata = {
+                    getModifiedGrimmoryAnnotations = function() return { 9 } end,
+                    removeModifiedGrimmoryAnnotation = spy.new(function() end),
+                },
+                api = { deleteAnnotation = spy.new(function() return true end) },
+            })
+
+            assert.has_error(function()
+                synchronizer:pushBookAnnotations("/books/a.epub", 5)
+            end, "Could not read annotations")
+
+            assert.spy(synchronizer.api.deleteAnnotation).was_not_called()
+            assert.spy(synchronizer.doc_metadata.removeModifiedGrimmoryAnnotation).was_not_called()
+        end)
+    end)
+
+    describe("pullBookAnnotations", function()
+        it("fails when Grimmory cannot be read", function()
+            local synchronizer = GrimmorySynchronize:new({
+                api = { getAnnotations = function() return false, nil end },
+            })
+
+            assert.has_error(function()
+                synchronizer:pullBookAnnotations("/books/a.epub", 5)
+            end)
+        end)
+
+        it("fails when the annotations cannot be written to the book", function()
+            local synchronizer = GrimmorySynchronize:new({
+                api = { getAnnotations = function() return true, {} end },
+                reading_annotations = { applyAnnotations = function() return false end },
+            })
+
+            assert.has_error(function()
+                synchronizer:pullBookAnnotations("/books/a.epub", 5)
+            end)
+        end)
+    end)
+
     describe("synchronizeBook", function()
         local function new_synchronizer(sync_annotations)
             local synchronizer = GrimmorySynchronize:new({
@@ -780,6 +823,27 @@ describe("GrimmorySynchronize", function()
             synchronizer:synchronizeBook("/books/a.epub", false, function() end)
 
             assert.are.same({ "pushBookMetadata", "pullBookProgress" }, call_order)
+        end)
+
+        it("skips annotations for books that are not EPUB", function()
+            local synchronizer, call_order = new_synchronizer(true)
+
+            synchronizer:synchronizeBook("/books/a.pdf", false, function() end)
+
+            assert.are.same({ "pushBookMetadata", "pullBookProgress" }, call_order)
+        end)
+
+        it("still syncs progress and sessions when annotations fail", function()
+            local synchronizer, call_order = new_synchronizer(true)
+            synchronizer.pushBookAnnotations = function() error("Could not read annotations", 0) end
+
+            local progress_messages = {}
+            synchronizer:synchronizeBook("/books/a.epub", false, function(message)
+                table.insert(progress_messages, message)
+            end)
+
+            assert.are.same({ "pushBookMetadata", "pullBookProgress" }, call_order)
+            assert.are.same({ state = "annotations-failed", book_path = "/books/a.epub" }, progress_messages[1])
         end)
 
         it("fails a refresh for a book that is not linked to Grimmory", function()

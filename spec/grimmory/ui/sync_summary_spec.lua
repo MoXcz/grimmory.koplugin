@@ -129,4 +129,16 @@ describe("GrimmorySyncSummary", function()
             { "  a", "" },
         }, summary:toKeyValuePairs())
     end)
+
+    it("reports books whose annotations failed", function()
+        local summary = GrimmorySyncSummary:new()
+
+        summary:record({ state = "annotations-failed", book_path = "/books/a.epub" })
+
+        assert.is_true(summary:hasDetails())
+        assert.are.same({
+            { "Annotations failed", "1" },
+            { "  a", "" },
+        }, summary:toKeyValuePairs())
+    end)
 end)

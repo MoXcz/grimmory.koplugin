@@ -52,6 +52,7 @@ end
 ---@field failed_progress GrimmorySyncSummaryEntry[]
 ---@field recorded_sessions GrimmorySyncSummaryEntry[]
 ---@field failed_sessions GrimmorySyncSummaryEntry[]
+---@field failed_annotations GrimmorySyncSummaryEntry[]
 ---@field checked_book_count integer
 ---@field private is_kept_book { [string]: boolean }
 local GrimmorySyncSummary = {}
@@ -68,6 +69,7 @@ function GrimmorySyncSummary:new()
         failed_progress = {},
         recorded_sessions = {},
         failed_sessions = {},
+        failed_annotations = {},
         checked_book_count = 0,
     }
     setmetatable(o, self)
@@ -123,6 +125,8 @@ function GrimmorySyncSummary:record(progress)
         table.insert(self.recorded_sessions, { name = name, detail = "" })
     elseif state == "session-error" then
         table.insert(self.failed_sessions, { name = name, detail = "" })
+    elseif state == "annotations-failed" then
+        table.insert(self.failed_annotations, { name = name, detail = "" })
     end
 end
 
@@ -139,6 +143,7 @@ function GrimmorySyncSummary:getSections()
         { title = _("Books failed"), entries = self.failed_books },
         { title = _("Progress failed"), entries = self.failed_progress },
         { title = _("Sessions failed"), entries = self.failed_sessions },
+        { title = _("Annotations failed"), entries = self.failed_annotations },
     }
 end
 
