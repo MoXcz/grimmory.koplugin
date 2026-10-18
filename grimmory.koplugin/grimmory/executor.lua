@@ -6,37 +6,33 @@ local NetworkManager = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 
 local GrimmoryLogger = require("grimmory/logger")
+local GrimmoryMessageReader = require("grimmory/message_reader")
 
 local logger = GrimmoryLogger:new()
 
-local function readFromFD(fd)
-    local ffi_buffer = ffi.new('char[?]', 1, {0})
-    local data = {}
-
-    if ffiutil.getNonBlockingReadSize(fd) == 0 then
-        return ""
+---@return string | nil chunk the bytes waiting on `fd`, or nil when there are none
+local function readAvailable(fd)
+    local available = ffiutil.getNonBlockingReadSize(fd)
+    if available == 0 then
+        return nil
     end
 
-    while true do
-        local bytes_read = tonumber(ffi.C.read(fd, ffi.cast('void*', ffi_buffer), 1))
-        if bytes_read < 0 then
-            local err = ffi.errno()
-            logger:err("readFromFD()", ffi.string(ffi.C.strerror(err)))
-            break
-        elseif bytes_read == 0 then -- EOF, no more data to read
-            break
-        else
-            local bytes_str = ffi.string(ffi_buffer, bytes_read)
+    -- nil means the size is unknown, so read a chunk like KOReader does.
+    available = available or 4096
 
-            if bytes_str == "\0" then
-                break
-            end
+    local chunk = ffi.new("char[?]", available)
+    local bytes_read = tonumber(ffi.C.read(fd, chunk, available))
 
-            table.insert(data, bytes_str)
-        end
+    if bytes_read < 0 then
+        logger:err("Failed reading from subprocess:", ffi.string(ffi.C.strerror(ffi.errno())))
+        return nil
     end
 
-    return table.concat(data)
+    if bytes_read == 0 then
+        return nil
+    end
+
+    return ffi.string(chunk, bytes_read)
 end
 
 local function writeToFD(fd, data)
@@ -217,7 +213,8 @@ function GrimmoryExecutor:background(callback, with_wifi)
         local was_terminated = false
 
         local terminate = function()
-            if subprocess_pid ~= nil then
+            -- runInSubProcess returns false when the fork fails.
+            if subprocess_pid then
                 ffiutil.terminateSubProcess(subprocess_pid)
             end
 
@@ -242,7 +239,7 @@ function GrimmoryExecutor:background(callback, with_wifi)
 
             local running_coroutine = coroutine.running()
 
-            local new_subprocess_pid, parent_read_fd = ffiutil.runInSubProcess(
+            local new_subprocess_pid, read_fd_or_error = ffiutil.runInSubProcess(
                 function(my_pid, child_write_fd)
                     ---@type GrimmoryRunnableProgressCallback
                     local function progress_callback(state)
@@ -280,25 +277,30 @@ function GrimmoryExecutor:background(callback, with_wifi)
 
             subprocess_pid = new_subprocess_pid
 
-            if was_terminated then
-                ffiutil.terminateSubProcess(subprocess_pid)
-                UIManager:allowStandby()
-                return false, "Terminated before starting subprocess"
-            end
-
             local subprocess_ok = false
             local subprocess_result = nil
 
             if subprocess_pid then
+                local parent_read_fd = read_fd_or_error
+                local has_final_state = false
+
                 table.insert(self.running_subprocesses, subprocess_pid)
 
+                local reader = GrimmoryMessageReader:new({
+                    read_chunk = function() return readAvailable(parent_read_fd) end,
+                })
+
                 while true do
+                    -- Checked before reading: once the child has exited, all it wrote is already in the pipe.
+                    local is_subprocess_done = ffiutil.isSubProcessDone(subprocess_pid)
                     local messages_received = 0
-                    local state_data = readFromFD(parent_read_fd)
-                    while state_data ~= "" do
-                        local decode_ok, state = pcall(json.decode, state_data)
+
+                    local message = reader:next()
+                    while message do
+                        local decode_ok, state = pcall(json.decode, message)
                         if decode_ok then
-                            if state and state.__runnable_ok ~= nil then
+                            if type(state) == "table" and state.__runnable_ok ~= nil then
+                                has_final_state = true
                                 subprocess_ok = state.__runnable_ok
                                 subprocess_result = state.__runnable_result
                             else
@@ -310,18 +312,14 @@ function GrimmoryExecutor:background(callback, with_wifi)
 
                         messages_received = messages_received + 1
 
-                        if messages_received > 100 then
-                            -- If we keep receiving messages we should hand
-                            -- back to the UI thread for a bit.
+                        if messages_received >= 100 then
+                            -- Hand back to the UI so a chatty subprocess cannot freeze it.
                             break
                         end
 
-                        state_data = readFromFD(parent_read_fd)
+                        message = reader:next()
                     end
 
-                    -- Even if the subprocess is done, if we haven't exhausted
-                    -- all of the messages we have to keep running.
-                    local is_subprocess_done = ffiutil.isSubProcessDone(subprocess_pid)
                     if is_subprocess_done and messages_received == 0 then
                         break
                     end
@@ -331,17 +329,25 @@ function GrimmoryExecutor:background(callback, with_wifi)
                     local continue_func = function() coroutine.resume(running_coroutine) end
                     UIManager:scheduleIn(0.1, continue_func)
 
-                    -- gives control back to UIManager
                     coroutine.yield()
                 end
 
-                -- Search for and remove the running subprocess PID
+                ffi.C.close(parent_read_fd)
+
+                if not has_final_state then
+                    logger:err("Subprocess ended without reporting a result")
+                    subprocess_result = "Subprocess ended without reporting a result"
+                end
+
                 for i, running_subprocess_id in ipairs(self.running_subprocesses) do
                     if running_subprocess_id == subprocess_pid then
                         table.remove(self.running_subprocesses, i)
                         break
                     end
                 end
+            else
+                logger:err("Could not start subprocess:", read_fd_or_error)
+                subprocess_result = read_fd_or_error
             end
 
             UIManager:allowStandby()
