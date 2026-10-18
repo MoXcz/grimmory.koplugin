@@ -5,7 +5,7 @@ local stub = require 'luassert.stub'
 package.path = "grimmory.koplugin/?.lua;" .. package.path
 
 local fake_logger = {
-    err = function() end,
+    err = spy.new(function() end),
     warn = function() end,
     info = function() end,
     dbg = function() end,
@@ -260,12 +260,13 @@ describe("GrimmorySynchronize", function()
                 repository = { getBooksPendingSync = function() return { 7, 9 } end },
             })
 
-            stub(synchronizer, "pushBookMetadata", function() error("boom") end)
+            stub(synchronizer, "pushBookMetadata", function() error("boom", 0) end)
 
             local states, callback = collect_states()
             synchronizer:pushAllPendingBookMetadata(callback)
 
             assert.are.same({ "book-push-metadata", "book-push-metadata" }, states)
+            assert.spy(fake_logger.err).was_called_with(fake_logger, "Failed to push metadata for book:", 7, "boom")
         end)
     end)
 
@@ -528,6 +529,34 @@ describe("GrimmorySynchronize", function()
 
             assert.are.same({ "session-skip" }, states)
             assert.spy(synchronizer.api.recordSession).was_not_called()
+        end)
+
+        it("moves past a short session that has finished", function()
+            local synchronizer = new_synchronizer({ session({ end_time = 30, is_finished = true }) }, {})
+
+            synchronizer:pushBookSessions(1, function() end)
+
+            assert.spy(synchronizer.repository.updateBookSyncTimestamp)
+                .was_called_with(synchronizer.repository, 1, "sessions", 30)
+        end)
+
+        it("moves past a finished session with too few pages", function()
+            local synchronizer = new_synchronizer({ session({ end_page = 1, is_finished = true }) }, {})
+            synchronizer.settings = new_settings({ getSessionThresholdPages = 5 })
+
+            synchronizer:pushBookSessions(1, function() end)
+
+            assert.spy(synchronizer.api.recordSession).was_not_called()
+            assert.spy(synchronizer.repository.updateBookSyncTimestamp)
+                .was_called_with(synchronizer.repository, 1, "sessions", 600)
+        end)
+
+        it("keeps a short session that may still grow pending", function()
+            local synchronizer = new_synchronizer({ session({ end_time = 30, is_finished = false }) }, {})
+
+            synchronizer:pushBookSessions(1, function() end)
+
+            assert.spy(synchronizer.repository.updateBookSyncTimestamp).was_not_called()
         end)
 
         it("stops at the first failed session so it can be retried", function()

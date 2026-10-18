@@ -97,6 +97,15 @@ function GrimmorySynchronize:pushBookProgress(book_id, callback)
     end
 end
 
+---Moves the sessions watermark past a skipped session that can no longer grow, so its book stops being pending.
+---@param book_id integer
+---@param session ReadingSession
+function GrimmorySynchronize:advancePastSkippedSession(book_id, session)
+    if session.is_finished then
+        self.repository:updateBookSyncTimestamp(book_id, "sessions", session.end_time)
+    end
+end
+
 ---@param book_id integer
 ---@param callback function
 function GrimmorySynchronize:pushBookSessions(book_id, callback)
@@ -117,21 +126,15 @@ function GrimmorySynchronize:pushBookSessions(book_id, callback)
         local total_seconds = session.end_time - session.start_time
         local total_pages = session.end_page - session.start_page + 1
 
-        if total_seconds < threshold_seconds then
-            logger:info("Skipped session below time threshold for book", book_id)
+        if total_seconds < threshold_seconds or total_pages < threshold_pages then
+            logger:info("Skipped session below thresholds for book", book_id, total_seconds, "s", total_pages, "pages")
             callback({
                 state = "session-skip",
                 bookPath = session.book_path,
                 since = session.end_time,
             })
 
-        elseif total_pages < threshold_pages then
-            logger:info("Skipped session below page threshold for book", book_id)
-            callback({
-                state = "session-skip",
-                bookPath = session.book_path,
-                since = session.end_time,
-            })
+            self:advancePastSkippedSession(book_id, session)
 
         elseif session.grimmory_id == nil then
             logger:err("Session failed recording with error for book: ", book_id, " - ", "No Grimmory ID")
@@ -275,7 +278,11 @@ function GrimmorySynchronize:pushAllPendingBookMetadata(callback)
             break
         end
 
-        pcall(self.pushBookMetadata, self, book_id, callback)
+        local push_ok, push_error = pcall(self.pushBookMetadata, self, book_id, callback)
+
+        if not push_ok then
+            logger:err("Failed to push metadata for book:", book_id, push_error)
+        end
 
         callback({
             state = "book-push-metadata",

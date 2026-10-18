@@ -63,6 +63,7 @@ end
 ---@field end_progress number
 ---@field start_xpointer string | nil
 ---@field end_xpointer string | nil
+---@field is_finished boolean true once it ended long enough ago that no new event can extend it
 
 ---@class ReadingSessionEvent
 ---@field session_id number
@@ -654,6 +655,7 @@ function GrimmoryLocalRepository:getPendingSessions(book_id)
                 end_progress = read_progress,
                 start_xpointer = event.xpointer,
                 end_xpointer = event.xpointer,
+                is_finished = false,
             }
 
             table.insert(sessions, new_session)
@@ -666,6 +668,11 @@ function GrimmoryLocalRepository:getPendingSessions(book_id)
             return a.end_time < b.end_time
         end
     )
+
+    local now = os.time()
+    for _, session in ipairs(sessions) do
+        session.is_finished = now - session.end_time > SESSION_COLLAPSE_THRESHOLD
+    end
 
     return sessions
 end
