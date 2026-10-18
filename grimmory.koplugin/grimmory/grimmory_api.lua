@@ -4,6 +4,7 @@ local https = require("ssl.https")
 local json = require("json")
 local ltn12 = require("ltn12")
 
+local GrimmoryDatetime = require("grimmory/datetime")
 local PluginMetadata = require("grimmory/plugin_metadata")
 local GrimmoryLogger = require("grimmory/logger")
 
@@ -36,40 +37,6 @@ local function from_json_bool(value, default_value)
     return value == true
 end
 
----@param timestamp number
-local function to_iso8601(timestamp)
-    if timestamp == nil then
-        return nil
-    end
-
-    local parsed = os.date("!*t", timestamp)
-    return string.format(
-        "%04d-%02d-%02dT%02d:%02d:%02dZ",
-        parsed.year,
-        parsed.month,
-        parsed.day,
-        parsed.hour,
-        parsed.min,
-        parsed.sec
-    )
-end
-
----@param value string
-local function from_iso8601(value)
-    local year, month, day, hour, min, sec = value:match(
-        "(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)"
-    )
-
-    return os.time({
-        year = year,
-        month = month,
-        day = day,
-        hour = hour,
-        min = min,
-        sec = sec
-    })
-end
-
 local function from_json_iso8601(value)
     value = from_json_string(value)
 
@@ -77,7 +44,7 @@ local function from_json_iso8601(value)
         return nil
     end
 
-    return from_iso8601(value)
+    return GrimmoryDatetime.fromIso8601(value)
 end
 
 ---@class BookMetadata
@@ -569,8 +536,8 @@ function GrimmoryAPI:recordSession(
     local request = {
         bookId = book_id,
         bookType = book_type,
-        startTime = to_iso8601(start_time),
-        endTime = to_iso8601(end_time),
+        startTime = GrimmoryDatetime.toIso8601(start_time),
+        endTime = GrimmoryDatetime.toIso8601(end_time),
         durationSeconds = duration_seconds,
         durationFormatted = nil,
         startProgress = start_progress,

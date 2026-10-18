@@ -1,47 +1,7 @@
 local DocumentRegistry = require("document/documentregistry")
 
 local GrimmoryCFIResolver = require("grimmory/cfi_resolver")
-
-
----@param value integer
----@return string
-local function to_annotation_datetime(value)
-    if value == nil then
-        return nil
-    end
-
-    local parsed = os.date("!*t", value)
-    return string.format(
-        "%04d-%02d-%02d %02d:%02d:%02dZ",
-        parsed.year,
-        parsed.month,
-        parsed.day,
-        parsed.hour,
-        parsed.min,
-        parsed.sec
-    )
-end
-
----@param value string
----@return integer timestamp
-local function from_annotation_datetime(value)
-    if value == nil then
-        return nil
-    end
-
-    local year, month, day, hour, min, sec = value:match(
-        "(%d+)-(%d+)-(%d+) (%d+):(%d+):(%d+)"
-    )
-
-    return os.time({
-        year = year,
-        month = month,
-        day = day,
-        hour = hour,
-        min = min,
-        sec = sec
-    })
-end
+local GrimmoryDatetime = require("grimmory/datetime")
 
 ---@param document_path string
 ---@param callback (fun(resolver: GrimmoryCFIResolver): nil)
@@ -239,8 +199,8 @@ function GrimmoryReadingAnnotations:applyAnnotations(book_path, grimmory_annotat
                 local koreader_annotation = {
                     grimmory_id = annotation.id,
 
-                    datetime = to_annotation_datetime(annotation.created_at),
-                    datetime_updated = to_annotation_datetime(annotation.updated_at),
+                    datetime = GrimmoryDatetime.toAnnotationDatetime(annotation.created_at),
+                    datetime_updated = GrimmoryDatetime.toAnnotationDatetime(annotation.updated_at),
 
                     color = GRIMMORY_COLOR_MAP[annotation.color] or DEFAULT_KOREADER_COLOR,
                     drawer = GRIMMORY_STYLE_MAP[annotation.style] or DEFAULT_KOREADER_STYLE,
@@ -284,8 +244,8 @@ function GrimmoryReadingAnnotations:getAnnotations(book_path)
                     local grimmory_annotation = {
                         id = annotation.grimmory_id,
                         book_id = -1,
-                        created_at = from_annotation_datetime(annotation.datetime),
-                        updated_at = from_annotation_datetime(annotation.datetime_updated),
+                        created_at = GrimmoryDatetime.fromAnnotationDatetime(annotation.datetime),
+                        updated_at = GrimmoryDatetime.fromAnnotationDatetime(annotation.datetime_updated),
                         cfi = cfi_resolver:xpointerRangeToCFI(annotation.pos0, annotation.pos1),
                         chapter = annotation.chapter,
                         text = annotation.text,
