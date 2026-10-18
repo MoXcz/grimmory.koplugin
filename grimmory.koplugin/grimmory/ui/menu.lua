@@ -136,7 +136,7 @@ function GrimmoryMenu:getAutomaticSyncOptionsMenu()
         },
         {
             text = _("Enable WiFi"),
-            enabled = Device:hasWifiToggle(),
+            enabled = Device:hasSeamlessWifiToggle(),
             checked_func = function()
                 return self.settings:getSyncEnableWifi()
             end,

@@ -7,7 +7,6 @@ local _ = require("gettext")
 
 local Dispatcher = require("dispatcher")
 local FileManager = require("apps/filemanager/filemanager")
-local NetworkManager = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local Event = require("ui/event")
 local ReadCollection = require("readcollection")
@@ -378,19 +377,6 @@ function Grimmory:isReadyToSync()
     return true
 end
 
-function Grimmory:isWifiConnected()
-    local ok, result = pcall(function()
-        return NetworkManager:isConnected()
-    end)
-
-    if not ok then
-        logger:err("Something went wrong checking wifi connectivity", result)
-        return true
-    end
-
-    return result
-end
-
 function Grimmory:onGrimmorySyncForegound()
     return self:onGrimmorySync(true)
 end
@@ -458,16 +444,6 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
                 self.dialog_manager:toast(refusal_message)
             end
 
-            return
-        end
-
-        -- Run in the foreground, as something with background tasks and
-        -- network management causes Android devices to SIGABRT.
-        if not self:isWifiConnected() then
-            logger:err("Cannot sync without connectivity")
-            self.dialog_manager:toast(
-                _("Failed to Synchronize with Grimmory: No Connectivity")
-            )
             return
         end
 
@@ -594,6 +570,14 @@ function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
                 if verbose then
                     self.dialog_manager:toast(
                         _("Grimmory synchronization has been interrupted")
+                    )
+                end
+            elseif result == GrimmoryExecutor.NO_CONNECTIVITY then
+                logger:err("Cannot sync without connectivity")
+
+                if verbose then
+                    self.dialog_manager:toast(
+                        _("Failed to Synchronize with Grimmory: No Connectivity")
                     )
                 end
             else

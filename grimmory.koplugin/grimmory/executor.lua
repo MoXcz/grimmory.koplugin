@@ -1,3 +1,4 @@
+local _ = require("gettext")
 local ffiutil = require("ffi/util")
 local ffi = require("ffi")
 local json = require("json")
@@ -64,7 +65,10 @@ end
 
 ---@class GrimmoryExecutor
 ---@field private running_subprocesses any[]
-local GrimmoryExecutor = {}
+local GrimmoryExecutor = {
+    -- Returned as the result when there is no network, so callers can tell it from a failed run.
+    NO_CONNECTIVITY = _("No network connection"),
+}
 
 function GrimmoryExecutor:new()
     local o = {}
@@ -110,93 +114,154 @@ local function wrap_coroutine(func)
     return coroutine.resume(co)
 end
 
----@return bool enabled_wifi
+---@return boolean connected true as well when the check itself fails, so a broken check never blocks a sync
+local function is_connected()
+    local ok, connected = pcall(NetworkManager.isConnected, NetworkManager)
+
+    if not ok then
+        logger:err("Something went wrong checking wifi connectivity", connected)
+        return true
+    end
+
+    return connected
+end
+
+---@return boolean wifi_on false as well when the check itself fails
+local function is_wifi_on()
+    local ok, wifi_on = pcall(NetworkManager.isWifiOn, NetworkManager)
+
+    if not ok then
+        logger:err("Something went wrong checking wifi state", wifi_on)
+        return false
+    end
+
+    return wifi_on
+end
+
+---"Restore Wi-Fi on resume" reads wifi_was_on, which KOReader rewrites when WiFi comes up or a turn-on fails.
+---@param wifi_was_on boolean
+local function restore_wifi_was_on(wifi_was_on)
+    NetworkManager.wifi_was_on = wifi_was_on
+
+    local koreader_settings = _G.G_reader_settings
+    if koreader_settings then
+        if wifi_was_on then
+            koreader_settings:makeTrue("wifi_was_on")
+        else
+            koreader_settings:makeFalse("wifi_was_on")
+        end
+    end
+end
+
+---@return boolean wifi_was_enabled true when this call turned WiFi on, so it should be turned off afterwards
+---@return boolean wifi_was_on KOReader's wifi_was_on from before the turn-on, to restore afterwards
 local function enable_wifi(timeout)
     if timeout == nil then
         timeout = 45
     end
 
-    if NetworkManager:isWifiOn() and NetworkManager:isConnected() then
+    if is_wifi_on() and is_connected() then
         logger:dbg("WiFi is already Active")
         return false
     end
 
-    if not Device:hasWifiToggle() then
-        -- Clean up standby before continuing.
+    -- Android can only open its WiFi settings, which no background sync should pop up.
+    if not Device:hasSeamlessWifiToggle() then
         logger:err("Requested with wifi but cannot enable")
         return false
     end
 
     local running_coroutine = coroutine.running()
-    local connectivity_result = nil
 
     local check_connectivity
     check_connectivity = function(iteration)
-        if iteration == nil then
-            iteration = 0
-        end
-
         if iteration > timeout * 4 then
             logger:dbg("Aborted connection check waiting")
-            connectivity_result = false
             coroutine.resume(running_coroutine)
             return
         end
 
-        if not NetworkManager:isConnected() then
+        if not is_connected() then
             UIManager:scheduleIn(0.25, check_connectivity, iteration + 1)
         else
             logger:dbg("Connection succesful")
-            connectivity_result = true
             coroutine.resume(running_coroutine)
         end
     end
 
-    -- If the wifi is not connected then we need to wait
-    -- for a connection and don't want to block while we do it.
     logger:dbg("Connecting to WiFi")
 
-    local wifi_needs_disable = false
+    local wifi_was_enabled = false
+    local wifi_was_on = NetworkManager.wifi_was_on == true
 
-    if not NetworkManager:isWifiOn() then
-        wifi_needs_disable = true
+    if not is_wifi_on() then
+        -- requestToTurnOnWifi alone leaves NetworkMgr.pending_connection set; enableWifi schedules the check
+        -- that clears it.
+        local ok, result = pcall(NetworkManager.enableWifi, NetworkManager)
 
-        local result = NetworkManager:requestToTurnOnWifi(
-            function()
-                logger:dbg("Wifi is active, waiting for connecitivty")
+        if not ok or result == false then
+            logger:err("Failed to turn on wifi", result)
+
+            if not ok then
+                -- It may have marked a connection as pending before it threw.
+                pcall(NetworkManager.disableWifi, NetworkManager)
             end
-        )
 
-        -- Explicit `false` means something went wrong trying
-        -- to turn on wifi - so we shouldn't try to turn it off again.
-        if result == false then
-            logger:err("Failed to turn on wifi: Unknown")
-
-            -- Clean up the connection the same as `NetworkManager:enableWifi` would
-            pcall(NetworkManager._abortWifiConnection, NetworkManager)
-            return false
+            restore_wifi_was_on(wifi_was_on)
+            return false, wifi_was_on
         end
 
-        -- "EBUSY" (16) means we are either waiting for connectivity
-        -- or just tried to disable?
-        if result == 16 then
-            logger:err("Failed to turn on wifi: EBUSY")
-            return false
-        end
+        -- nil means another attempt is already pending: wait for it, but leave WiFi to whoever started it.
+        wifi_was_enabled = result == true
     end
 
-    -- Start connectivity checking
     UIManager:scheduleIn(0.25, check_connectivity, 0)
-
-    -- If we somehow blocked we will never resume - so don't even try
-    if connectivity_result == nil then
-        -- Give control back to UIManager
-        logger:dbg("Waiting...")
-        coroutine.yield()
-    end
+    logger:dbg("Waiting...")
+    coroutine.yield()
 
     logger:dbg("Continuing after wifi")
-    return wifi_needs_disable
+    return wifi_was_enabled, wifi_was_on
+end
+
+-- Shared by every executor: runs overlap (a progress pull and a sync), so WiFi turned on
+-- for one of them stays up until the last run that uses the network ends.
+local network_runs = 0
+local is_wifi_ours = false
+local wifi_was_on_before = false
+
+---@param with_wifi boolean turn WiFi on when it is off
+local function acquire_network(with_wifi)
+    network_runs = network_runs + 1
+
+    if with_wifi and not is_wifi_ours then
+        logger:dbg("Execution requested WiFi")
+
+        local wifi_was_enabled, wifi_was_on = enable_wifi()
+
+        if wifi_was_enabled then
+            is_wifi_ours = true
+            wifi_was_on_before = wifi_was_on
+        end
+    end
+end
+
+local function release_network()
+    network_runs = network_runs - 1
+
+    if network_runs > 0 or not is_wifi_ours then
+        return
+    end
+
+    is_wifi_ours = false
+
+    logger:dbg("Disabling WiFi after execution")
+
+    local ok, err = pcall(NetworkManager.disableWifi, NetworkManager)
+    if not ok then
+        logger:err("Failed to turn off wifi", err)
+    end
+
+    restore_wifi_was_on(wifi_was_on_before)
 end
 
 ---@alias GrimmoryRunnableProgressCallback function(state: any, terminate: function): bool
@@ -223,18 +288,23 @@ function GrimmoryExecutor:background(callback, with_wifi)
 
         local function run_in_background(runnable, on_progress)
             UIManager:preventStandby()
+            acquire_network(with_wifi)
 
-            -- We want the executor to attempt to connect to wifi before it runs
-            -- anything, and if it turns this on we should disable it afterwards, too.
-            local wifi_needs_disable = false
-            if with_wifi then
-                logger:dbg("Execution requested WiFi")
-                wifi_needs_disable = enable_wifi()
+            local function finish(ok, result)
+                UIManager:allowStandby()
+                release_network()
+
+                return ok, result
             end
 
             if was_terminated then
-                UIManager:allowStandby()
-                return false, "Termianted before starting subprocess"
+                return finish(false, "Terminated before starting subprocess")
+            end
+
+            -- Checked here in the parent: NetworkManager aborts Android builds when called from the subprocess.
+            if not is_connected() then
+                logger:err("Cannot run without connectivity")
+                return finish(false, GrimmoryExecutor.NO_CONNECTIVITY)
             end
 
             local running_coroutine = coroutine.running()
@@ -350,15 +420,7 @@ function GrimmoryExecutor:background(callback, with_wifi)
                 subprocess_result = read_fd_or_error
             end
 
-            UIManager:allowStandby()
-
-            -- If wifi was enabled, disable it again
-            if wifi_needs_disable then
-                logger:dbg("Disabling WiFi after execution")
-                NetworkManager:turnOffWifi()
-            end
-
-            return subprocess_ok, subprocess_result
+            return finish(subprocess_ok, subprocess_result)
         end
 
         callback(run_in_background, terminate)
