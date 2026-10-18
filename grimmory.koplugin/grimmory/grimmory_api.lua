@@ -1,4 +1,6 @@
 local _ = require("gettext")
+local DataStorage = require("datastorage")
+local LuaSettings = require("luasettings")
 local http = require("socket.http")
 local https = require("ssl.https")
 local json = require("json")
@@ -9,6 +11,9 @@ local PluginMetadata = require("grimmory/plugin_metadata")
 local GrimmoryLogger = require("grimmory/logger")
 
 local logger = GrimmoryLogger:new()
+
+-- Each sync runs in a forked subprocess, so tokens kept only in memory would not outlive the run.
+local TOKEN_STORE_PATH = DataStorage:getSettingsDir() .. "/grimmory_tokens.lua"
 
 
 ---@param value any
@@ -119,6 +124,7 @@ end
 
 ---@class GrimmoryAPI
 ---@field settings GrimmorySettings
+---@field private cached_account string | nil the connection the cached tokens belong to
 ---@field private cached_access_token string
 ---@field private cached_refresh_token string
 ---@field private cached_token_expiry number
@@ -128,13 +134,77 @@ function GrimmoryAPI:new(o)
     o = o or {}
     setmetatable(o, self)
     self.__index = self
-    o:init()
     return o
 end
 
-function GrimmoryAPI:init()
-    -- TODO: Watch base URI / username / password fields to reset access token
+---@private
+---@return string account
+function GrimmoryAPI:getAccount()
+    return self.settings:getBaseUri() .. "\n" .. self.settings:getUsername()
+end
 
+---@private
+function GrimmoryAPI:loadStoredTokens()
+    local ok, tokens = pcall(function()
+        return LuaSettings:open(TOKEN_STORE_PATH):readSetting("tokens")
+    end)
+
+    if not ok then
+        logger:err("Could not read stored Grimmory tokens", tokens)
+        return
+    end
+
+    local is_valid = (
+        type(tokens) == "table" and
+        type(tokens.access_token) == "string" and
+        type(tokens.refresh_token) == "string" and
+        type(tokens.expiry) == "number"
+    )
+
+    if is_valid and tokens.account == self:getAccount() then
+        self.cached_account = tokens.account
+        self.cached_access_token = tokens.access_token
+        self.cached_refresh_token = tokens.refresh_token
+        self.cached_token_expiry = tokens.expiry
+    end
+end
+
+---@private
+function GrimmoryAPI:storeTokens()
+    local ok, err = pcall(function()
+        local store = LuaSettings:open(TOKEN_STORE_PATH)
+
+        if self.cached_access_token then
+            store:saveSetting("tokens", {
+                account = self.cached_account,
+                access_token = self.cached_access_token,
+                refresh_token = self.cached_refresh_token,
+                expiry = self.cached_token_expiry,
+            })
+        else
+            store:delSetting("tokens")
+        end
+
+        store:flush()
+    end)
+
+    if not ok then
+        logger:err("Could not store Grimmory tokens", err)
+    end
+end
+
+---@private
+function GrimmoryAPI:forgetTokens()
+    self.cached_account = nil
+    self.cached_token_expiry = nil
+    self.cached_refresh_token = nil
+    self.cached_access_token = nil
+end
+
+---Makes the next request log in again, e.g. after the connection settings change.
+function GrimmoryAPI:forgetStoredTokens()
+    self:forgetTokens()
+    self:storeTokens()
 end
 
 function GrimmoryAPI:getUri(path)
@@ -272,10 +342,16 @@ function GrimmoryAPI:rawRequest(method, uri, data, headers, sink)
     return true, code, response
 end
 
-function GrimmoryAPI:request(method, path, data, headers, sink)
-    headers = headers or {}
+---@private
+---@return boolean ok
+---@return boolean is_cached true when the token was cached before this call, so the server may since have revoked it
+function GrimmoryAPI:ensureToken()
+    if self.cached_account ~= self:getAccount() then
+        self:forgetTokens()
+        self:loadStoredTokens()
+    end
 
-    local uri = self:getUri(path)
+    local is_cached = self.cached_access_token ~= nil
 
     if self.cached_refresh_token ~= nil and self.cached_token_expiry <= os.time() then
         -- If token exists but is expired, try to refresh
@@ -295,9 +371,13 @@ function GrimmoryAPI:request(method, path, data, headers, sink)
             self.cached_refresh_token = nil
             self.cached_access_token = nil
         end
+
+        self:storeTokens()
     end
 
     if self.cached_access_token == nil then
+        is_cached = false
+
         local access_token_ok, access_token, refresh_token, expiration = self:getToken(
             self.settings:getBaseUri(),
             self.settings:getUsername(),
@@ -305,29 +385,57 @@ function GrimmoryAPI:request(method, path, data, headers, sink)
         )
 
         if not access_token_ok or not access_token or not refresh_token then
-            return false, 0, "Could not get access token"
+            return false, false
         end
 
         -- Default expiration to 2 minutes if it's not defined.
         -- For Grimmory this is "safe" as we usually default to 7200
+        self.cached_account = self:getAccount()
         self.cached_token_expiry = os.time() + (expiration or 3600)
         self.cached_refresh_token = refresh_token
         self.cached_access_token = access_token
+
+        self:storeTokens()
     end
 
-    if self.cached_access_token then
-        headers["Authorization"] = "Bearer " .. self.cached_access_token
+    return true, is_cached
+end
+
+---@private
+---@return boolean ok
+---@return number code
+---@return any response
+---@return boolean is_cached_token_rejected
+function GrimmoryAPI:requestOnce(method, uri, data, headers, sink)
+    local token_ok, is_cached = self:ensureToken()
+
+    if not token_ok then
+        return false, 0, "Could not get access token", false
     end
+
+    headers["Authorization"] = "Bearer " .. self.cached_access_token
 
     local ok, code, response = self:rawRequest(method, uri, data, headers, sink)
 
     if code == 401 then
         logger:warn("Token expired or was otherwise invalid")
-        self.cached_token_expiry = nil
-        self.cached_refresh_token = nil
-        self.cached_access_token = nil
+        self:forgetStoredTokens()
     end
 
+    return ok, code, response, code == 401 and is_cached
+end
+
+function GrimmoryAPI:request(method, path, data, headers, sink)
+    headers = headers or {}
+
+    local uri = self:getUri(path)
+
+    local ok, code, response, is_cached_token_rejected = self:requestOnce(method, uri, data, headers, sink)
+
+    -- A token cached before this call may have been revoked since; a sink cannot be replayed, though.
+    if is_cached_token_rejected and sink == nil then
+        ok, code, response = self:requestOnce(method, uri, data, headers, sink)
+    end
 
     return ok, code, response
 end

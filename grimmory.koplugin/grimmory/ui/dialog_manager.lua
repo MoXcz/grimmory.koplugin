@@ -149,6 +149,9 @@ function DialogManager:showConnectionSettings()
                     self.settings:setUsername(fields[2])
                     self.settings:setPassword(fields[3])
 
+                    -- A changed password would otherwise go untested until the stored session expires.
+                    self.api:forgetStoredTokens()
+
                     UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
 
                     UIManager:close(dialog)
