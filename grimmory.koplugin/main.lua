@@ -438,8 +438,13 @@ function Grimmory:refreshUI(after_refresh)
         pcall(self.ui.annotation.updateAnnotations, self.ui.annotation, true, true)
     end
 
-    -- A widget shown before the reload would end up hidden behind the reopened reader.
-    self.ui:reloadDocument(nil, nil, after_refresh)
+    local after_open
+    if after_refresh then
+        -- KOReader runs after_open inside ReaderUI:init, before showing the new reader on top of everything.
+        after_open = function() UIManager:nextTick(after_refresh) end
+    end
+
+    self.ui:reloadDocument(nil, nil, after_open)
 end
 
 function Grimmory:onGrimmorySync(verbose, book_path, refresh_book)
