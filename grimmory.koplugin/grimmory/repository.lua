@@ -451,28 +451,22 @@ function GrimmoryLocalRepository:getReadingProgress(book_id, cutoff)
                     book_event.current_page,
                     book_event.page_count,
                     book_event.xpointer
-                FROM (
-                    SELECT
-                        s.book_id,
-                        MAX(e.id) AS event_id
-                    FROM book_event e
-                    JOIN book_session s ON s.id = e.session_id
-                    WHERE
-                        e.created_at < ?
-                    GROUP BY s.book_id
-                ) AS last_event
-                JOIN book_event ON last_event.event_id = book_event.id
+                FROM book_event
                 JOIN book_session ON book_event.session_id = book_session.id
                 JOIN book ON book_session.book_id = book.id
                 WHERE
-                    book.id = ?
+                    book_session.book_id = ?
+                    AND
+                    book_event.created_at < ?
+                ORDER BY book_event.id DESC
+                LIMIT 1
             ]])
 
             if cutoff == nil then
                 cutoff = os.time()
             end
 
-            stmt:bind(cutoff, book_id)
+            stmt:bind(book_id, cutoff)
 
             local row = stmt:step()
             stmt:close()
