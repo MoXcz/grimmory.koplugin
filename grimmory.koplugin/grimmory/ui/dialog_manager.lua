@@ -313,7 +313,8 @@ function DialogManager:showSyncFrequencySettings(on_change)
                     callback = function()
                         local fields = dialog:getFields()
 
-                        self.settings:setSyncFrequency(math.max(1, fields[1]))
+                        local minutes = tonumber(fields[1]) or self.settings:getSyncFrequency()
+                        self.settings:setSyncFrequency(math.max(1, minutes))
 
                         UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
 
@@ -361,8 +362,11 @@ function DialogManager:showSessionThresholdSettings()
                 callback = function()
                     local fields = dialog:getFields()
 
-                    self.settings:setSessionThresholdSeconds(math.max(0, fields[1]))
-                    self.settings:setSessionThresholdPages(math.max(0, fields[2]))
+                    local seconds = tonumber(fields[1]) or self.settings:getSessionThresholdSeconds()
+                    local pages = tonumber(fields[2]) or self.settings:getSessionThresholdPages()
+
+                    self.settings:setSessionThresholdSeconds(math.max(0, seconds))
+                    self.settings:setSessionThresholdPages(math.max(0, pages))
 
                     UIManager:broadcastEvent(Event:new("GrimmorySettingsChanged"))
 
